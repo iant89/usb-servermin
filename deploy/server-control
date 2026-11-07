@@ -1,0 +1,8 @@
+#!/bin/sh
+# Starts the Server Control core with the bundled Node.js runtime when present
+# (portable installs), otherwise the system's node.
+set -e
+APP=/opt/servermin
+if [ -x "$APP/node/bin/node" ]; then NODE="$APP/node/bin/node"; else NODE="$(command -v node)"; fi
+[ -n "$NODE" ] || { echo "server-control: Node.js 22.13 or newer is required" >&2; exit 1; }
+exec "$NODE" --enable-source-maps "$APP/server/server.js"

@@ -1,0 +1,26 @@
+{
+  "id": "applications",
+  "name": "Applications",
+  "version": "1.0.0",
+  "description": "Deploy and manage applications: container images, Compose stacks, static sites, Node apps and system services.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["deployments", "versions", "environments"],
+  "requires": [
+    { "capability": "docker.engine", "optional": true },
+    { "capability": "services.systemd", "optional": true }
+  ],
+  "permissions": [
+    { "id": "applications.read", "description": "View applications, deployments and logs" },
+    { "id": "applications.write", "description": "Create, change and remove applications" },
+    { "id": "applications.deploy", "description": "Deploy, start, stop and restart applications" }
+  ],
+  "events": { "publishes": ["applications"] },
+  "config": [
+    { "key": "containerPrefix", "type": "string", "label": "Container name prefix", "default": "app-", "pattern": "^[a-z0-9-]{0,20}$" },
+    { "key": "keepDeployments", "type": "number", "label": "Deployments kept per application", "default": 50, "min": 5, "max": 1000 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 96 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

@@ -1,0 +1,20 @@
+{
+  "http": { "host": "0.0.0.0", "port": 80, "trustProxy": false },
+  "paths": {
+    "app": "/opt/servermin",
+    "shell": "/opt/servermin/shell",
+    "data": "/var/lib/servermin",
+    "modules": "/var/lib/servermin/modules",
+    "logs": "/var/log/servermin",
+    "tmp": "/var/tmp/servermin"
+  },
+  "modules": {
+    "preinstall": ["/opt/servermin/modules"],
+    "sources": ["/opt/servermin/modules", "/var/lib/servermin/module-sources"],
+    "watch": false,
+    "maxMemoryMb": 512
+  },
+  "privileged": { "mode": "sudo", "helper": "/usr/lib/servermin/servermin-privileged" },
+  "logging": { "level": "INFO", "retentionDays": 14, "stdout": true },
+  "auth": { "sessionHours": 12, "secureCookies": "auto", "loginAttempts": 5, "lockoutMinutes": 15 }
+}

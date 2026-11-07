@@ -1,0 +1,39 @@
+# Server Control core platform (systemd unit, §39).
+#
+# Runs as the unprivileged "servermin" account. Privileged operations go through
+# /usr/lib/servermin/servermin-privileged via a single sudoers rule, so sudo must keep working:
+# that is why NoNewPrivileges and a reduced capability bounding set are NOT used here.
+
+[Unit]
+Description=Server Control (modular server administration platform)
+Documentation=file:///opt/servermin/README.md
+After=network-online.target local-fs.target systemd-journald.socket
+Wants=network-online.target
+RequiresMountsFor=/var/lib/servermin /opt/servermin
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=servermin
+Group=servermin
+SupplementaryGroups=systemd-journal adm
+Environment=NODE_ENV=production
+Environment=SERVERMIN_CONFIG=/etc/servermin/config.json
+EnvironmentFile=-/etc/servermin/environment
+ExecStart=/opt/servermin/bin/server-control
+WorkingDirectory=/var/lib/servermin
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+# Bind port 80 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+UMask=0027
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-control
+
+[Install]
+WantedBy=multi-user.target

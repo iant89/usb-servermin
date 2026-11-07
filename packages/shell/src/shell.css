@@ -1,0 +1,33 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+.sm-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.8125rem;
+}
+.sm-pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  padding: var(--eui-space-3);
+  background: var(--eui-color-surface-sunken);
+  border: 1px solid var(--eui-color-border);
+  border-radius: var(--eui-radius-md);
+  max-height: 480px;
+  overflow: auto;
+}
+.sm-auth {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--eui-space-4);
+  box-sizing: border-box;
+}
+.sm-auth-card {
+  width: min(420px, 100%);
+}

@@ -1,0 +1,7 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "dist/backend.js": "0e2da66128bdab9048e6ff4dacaea67c0702f66fad52bbb16a51919b8b9d1454",
+    "module.json": "39eafe837db1b9560ad896113a386038eb461ea3349d2605bdacb09f4a4f9795"
+  }
+}

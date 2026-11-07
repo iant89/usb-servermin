@@ -1,0 +1,8 @@
+{
+  "id": "echo-provider",
+  "name": "Echo provider",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "provides": ["demo.echo"],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 64 }
+}

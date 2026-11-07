@@ -1,0 +1,21 @@
+{
+  "id": "terminal",
+  "name": "Terminal",
+  "version": "1.0.0",
+  "description": "A shell on the server in the browser, over an authenticated WebSocket.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["pty", "shell"],
+  "permissions": [{ "id": "terminal.access", "description": "Open a shell on the server (as the Server Control service account)" }],
+  "channels": [{ "name": "session", "permission": "terminal.access", "description": "An interactive shell session" }],
+  "events": { "publishes": ["terminal"] },
+  "host": { "commands": ["python3"] },
+  "config": [
+    { "key": "shell", "type": "string", "label": "Shell", "default": "/bin/bash", "pattern": "^/[A-Za-z0-9/_.-]+$", "required": true },
+    { "key": "maxSessions", "type": "number", "label": "Maximum concurrent sessions", "default": 5, "min": 1, "max": 20 },
+    { "key": "idleMinutes", "type": "number", "label": "Close idle sessions after (minutes)", "default": 30, "min": 1, "max": 1440 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 96 },
+  "frontend": { "entry": "dist/frontend.js", "style": "dist/frontend.css" }
+}

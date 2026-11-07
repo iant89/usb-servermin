@@ -1,0 +1,8 @@
+{
+  "name": "@servermin/module-hello",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal example module: a route, a migration, a channel, an event, settings and UI contributions.",
+  "dependencies": { "@servermin/sdk": "1.0.0", "@servermin/client": "1.0.0" }
+}

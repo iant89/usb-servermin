@@ -1,0 +1,29 @@
+{
+  "id": "docker",
+  "name": "Docker",
+  "version": "1.0.0",
+  "description": "Containers, images, networks, volumes and Compose projects through the Docker Engine API.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["containers", "images", "networks", "volumes", "compose"],
+  "provides": ["docker.engine"],
+  "permissions": [
+    { "id": "docker.read", "description": "View containers, images, networks, volumes and logs" },
+    { "id": "docker.write", "description": "Start, stop, create and remove containers, images, networks and volumes" },
+    { "id": "docker.execute", "description": "Run commands inside containers" }
+  ],
+  "channels": [
+    { "name": "logs", "permission": "docker.read", "description": "Live container logs (params: id)" },
+    { "name": "events", "permission": "docker.read", "description": "Docker Engine events" }
+  ],
+  "events": { "publishes": ["docker"] },
+  "host": { "commands": ["docker"] },
+  "config": [
+    { "key": "socketPath", "type": "string", "label": "Docker socket", "description": "Unix socket of the Docker Engine.", "default": "/var/run/docker.sock", "required": true, "pattern": "^/[A-Za-z0-9_./-]+$" },
+    { "key": "composeDirectory", "type": "string", "label": "Compose projects directory", "description": "Where projects created here are stored. Empty uses the module data directory.", "default": "" },
+    { "key": "logTail", "type": "number", "label": "Log lines to load", "default": 300, "min": 10, "max": 10000 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 160 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

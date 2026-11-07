@@ -1,0 +1,13 @@
+{
+  "name": "@servermin/client",
+  "version": "1.0.0",
+  "description": "Browser runtime for the Server Control shell and module frontends: API client, WebSocket channels, router, frontend registration and React hooks.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@servermin/sdk": "1.0.0"
+  }
+}

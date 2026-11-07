@@ -1,0 +1,9 @@
+{
+  "id": "echo-consumer",
+  "name": "Echo consumer",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "requires": [{ "capability": "demo.echo" }],
+  "permissions": [{ "id": "echo-consumer.use", "description": "Use" }],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 64 }
+}

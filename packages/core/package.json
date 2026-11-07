@@ -1,0 +1,14 @@
+{
+  "name": "@servermin/core",
+  "version": "1.0.0",
+  "description": "Server Control core platform: module runtime, registry, auth, event bus, API and WebSocket gateway.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@servermin/sdk": "1.0.0",
+    "ws": "^8.22.1"
+  }
+}

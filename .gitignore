@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.dev/
+*.log
+coverage/
+release/
+.vitest-tmp/
+modules/*/integrity.json
+examples/*/integrity.json

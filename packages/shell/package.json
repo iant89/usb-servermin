@@ -1,0 +1,13 @@
+{
+  "name": "@servermin/shell",
+  "version": "1.0.0",
+  "description": "Server Control web application shell (React + ENTERPRISE-UI). Module UI is loaded at runtime.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@enterprise-ui/react": "0.1.0",
+    "@servermin/client": "1.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}
