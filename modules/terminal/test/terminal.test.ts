@@ -22,8 +22,9 @@ describe('pty bridge', () => {
         setTimeout(() => (clearInterval(t), reject(new Error(`timeout waiting for ${re}; got ${JSON.stringify(out)}`))), 5000);
       });
     child.stdin.write('stty size; tty\n');
+    // Output arrives in chunks: wait for each expected line instead of assuming they come together.
     await wait(/30 100/);
-    expect(out).toMatch(/\/dev\/pts\//);
+    await wait(/\/dev\/pts\/\d+/);
     (child.stdio[3] as NodeJS.WritableStream).write(JSON.stringify({ type: 'resize', rows: 40, cols: 120 }) + '\n');
     await new Promise((r) => setTimeout(r, 100));
     child.stdin.write('stty size\n');
