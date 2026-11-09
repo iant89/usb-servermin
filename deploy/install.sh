@@ -44,8 +44,12 @@ fi
 for cmd in sudo python3 tar; do command -v "$cmd" >/dev/null || { echo "Missing $cmd (apt-get install -y $cmd)" >&2; exit 1; }; done
 
 # ── Service account ──────────────────────────────────────────────────────────────
+# Create the group explicitly: useradd only makes one when USERGROUPS_ENAB is on in /etc/login.defs.
+getent group servermin >/dev/null || groupadd --system servermin
 if ! id servermin >/dev/null 2>&1; then
-  useradd --system --home-dir /var/lib/servermin --create-home --shell /bin/bash --comment "Server Control" servermin
+  useradd --system --gid servermin --home-dir /var/lib/servermin --create-home --shell /bin/bash --comment "Server Control" servermin
+elif [[ "$(id -gn servermin)" != "servermin" ]]; then
+  usermod -g servermin servermin
 fi
 for g in systemd-journal adm docker; do getent group "$g" >/dev/null && usermod -aG "$g" servermin; done
 if getent group docker >/dev/null; then
@@ -54,6 +58,22 @@ fi
 
 # ── Files ────────────────────────────────────────────────────────────────────────
 systemctl stop server-control.service 2>/dev/null || true
+
+# ── Port check: refuse to install into a restart loop if another program owns the port ──
+WANT_PORT="$PORT"
+if [[ -z "$WANT_PORT" && -f /etc/servermin/config.json ]]; then
+  WANT_PORT="$("$NODE" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("/etc/servermin/config.json")).http.port??80))}catch{process.stdout.write("80")}')"
+fi
+WANT_PORT="${WANT_PORT:-80}"
+# Try to bind the port (we run as root, like systemd's CAP_NET_BIND_SERVICE allows the service).
+if ! "$NODE" -e 'require("net").createServer().once("error",()=>process.exit(1)).listen(Number(process.argv[1]),"0.0.0.0",function(){this.close(()=>process.exit(0))})' "$WANT_PORT"; then
+  HOLDERS=""
+  command -v ss >/dev/null && HOLDERS="$(ss -H -ltnp "sport = :$WANT_PORT" | grep -o '(("[^"]*"' | tr -d '("' | sort -u | tr '\n' ' ')"
+  echo "Port $WANT_PORT is already in use${HOLDERS:+ by: $HOLDERS}" >&2
+  [[ -n "$HOLDERS" ]] && echo "Stop that program (for example: sudo systemctl disable --now ${HOLDERS%% *})" >&2
+  echo "or install Server Control on another port: sudo ./install.sh --port 8080" >&2
+  exit 1
+fi
 rm -rf "$APP.new"
 mkdir -p "$APP.new"
 cp -a "$SRC/server" "$SRC/shell" "$SRC/modules" "$SRC/cli" "$SRC/bin" "$APP.new/"

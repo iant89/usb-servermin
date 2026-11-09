@@ -192,13 +192,22 @@ async function authenticate(): Promise<string> {
       return `serverctl login (${file})`;
     }
   }
+  // Before asking for a password, make sure an account can exist at all.
+  const session = (await fetch(`${BASE}/api/v1/auth/session`).then((r) => r.json()).catch(() => ({}))) as { needsSetup?: boolean };
+  if (session.needsSetup) {
+    const tokenFile = join(config?.paths?.data ?? '/var/lib/servermin', 'setup-token');
+    fail(`no administrator exists yet: open ${BASE.replace('127.0.0.1', '<server-ip>')}/ in a browser, enter the setup token (sudo cat ${tokenFile}) and create the account, then run this again`);
+  }
   const [username, password] = await promptCredentials(value('user'));
   const res = await fetch(`${BASE}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-servermin-request': '1', origin: BASE },
     body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) fail(`sign-in failed: ${((await res.json().catch(() => ({}))) as any).error ?? res.status}`);
+  if (!res.ok) {
+    const error = ((await res.json().catch(() => ({}))) as any).error ?? `HTTP ${res.status}`;
+    fail(`sign-in as "${username}" failed: ${error}${res.status === 401 ? ' — check the username (Settings → Users) and password; 5 failures lock the account for 15 minutes' : ''}`);
+  }
   auth = { cookie: res.headers.get('set-cookie')!.split(';')[0] };
   return `password (${username})`;
 }
@@ -275,9 +284,14 @@ async function hostChecks() {
     if (!onSystemd) skip('systemd is not running on this host');
     const enabled = sh('systemctl', ['is-enabled', 'server-control.service']).out;
     const active = sh('systemctl', ['is-active', 'server-control.service']).out;
-    const props = Object.fromEntries(sh('systemctl', ['show', 'server-control.service', '-p', 'NRestarts,User,ActiveEnterTimestamp']).out.split('\n').map((l) => l.split('=')));
-    assert(active === 'active', `server-control.service is ${active}`);
+    const props = Object.fromEntries(sh('systemctl', ['show', 'server-control.service', '-p', 'NRestarts,User,ActiveEnterTimestamp,MainPID']).out.split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    assert(active === 'active', `server-control.service is ${active}${diagnosePort()}`);
     if (props.User !== 'servermin') fail(`runs as "${props.User || 'root'}", expected servermin`);
+    // "active" can be a moment between crash-loop restarts: make sure this process holds the web port.
+    if (isRoot && has('ss')) {
+      const listeners = sh('ss', ['-H', '-ltnp', `sport = :${port}`]).out;
+      if (!new RegExp(`pid=${props.MainPID}\\b`).test(listeners)) fail(`active, but not listening on port ${port}${diagnosePort()}`);
+    }
     if (enabled !== 'enabled') warn(`active but "${enabled}" — it will not start at boot`);
     if (Number(props.NRestarts) > 0) warn(`active, but restarted ${props.NRestarts} times since boot; see journalctl -u server-control`);
     return `active and enabled, user servermin, up since ${props.ActiveEnterTimestamp}`;
@@ -348,12 +362,46 @@ async function hostChecks() {
   });
 }
 
+/** Explains who holds the web port and whether Server Control failed to bind it. */
+function diagnosePort(): string {
+  const hints: string[] = [];
+  const url = new URL(BASE);
+  const portNum = url.port || (url.protocol === 'https:' ? '443' : '80');
+  if (has('ss')) {
+    const ss = sh('ss', ['-H', '-ltnp', `sport = :${portNum}`]);
+    const procs = [...new Set([...ss.out.matchAll(/\(\("([^"]+)",pid=(\d+)/g)].map((m) => `${m[1]} (pid ${m[2]})`))];
+    if (procs.length) hints.push(`port ${portNum} is held by ${procs.join(', ')}`);
+    else if (ss.out) hints.push(`something listens on port ${portNum}${isRoot ? '' : ' (run with sudo to see which program)'}`);
+    else hints.push(`nothing listens on port ${portNum}`);
+  }
+  if (existsSync('/run/systemd/system') && has('journalctl')) {
+    const log = sh('journalctl', ['-u', 'server-control', '-b', '--no-pager', '-n', '300', '-o', 'cat']).out;
+    if (/EADDRINUSE/.test(log)) hints.push(`Server Control could not bind port ${portNum} (EADDRINUSE): stop the other program or reinstall with --port`);
+    const listening = [...log.matchAll(/Listening on ([^"\s]+)/g)].pop()?.[1];
+    if (listening) hints.push(`Server Control last reported listening on ${listening}`);
+  }
+  return hints.length ? ` — ${hints.join('; ')}` : '';
+}
+
 async function apiChecks() {
   group('Platform API');
 
   const health = await check('Web server reachable', async () => {
-    const r = await api('GET', '/api/v1/health', undefined, 5000).catch((e) => fail(`${BASE}: ${e.cause?.code ?? e.message}`));
-    assert(r.status === 200, `HTTP ${r.status}`);
+    const res = await fetch(`${BASE}/api/v1/health`, { signal: AbortSignal.timeout(5000) }).catch((e) => fail(`${BASE}: ${e.cause?.code ?? e.message}${diagnosePort()}`));
+    const text = await res.text();
+    let body: any = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      /* not JSON */
+    }
+    // Every Server Control response carries x-request-id; anything else means another program answered.
+    if (!res.headers.get('x-request-id') || res.status !== 200 || typeof body?.version !== 'string') {
+      const who = res.headers.get('server') ? `"${res.headers.get('server')}"` : 'a program that is not Server Control';
+      const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 80);
+      fail(`HTTP ${res.status} from ${who}${snippet ? ` (${snippet})` : ''}${diagnosePort()}`);
+    }
+    const r = { status: res.status, body };
     report.coreVersion = r.body.version;
     if (r.body.status !== 'HEALTHY') warn(`core ${r.body.version} reports ${r.body.status}`);
     return `core ${r.body.version}, ${r.body.status}`;
