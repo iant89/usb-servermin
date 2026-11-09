@@ -67,3 +67,16 @@ describe('servermin-verify when another program owns the port', () => {
     expect(r.detail).toMatch(/^HTTP 404 from "nginx\/1\.24\.0 \(Ubuntu\)" \(<html><body><h1>404 Not Found/);
   });
 });
+
+describe('servermin-verify before the first administrator exists', () => {
+  it('explains the setup step instead of asking for a password', async () => {
+    const fresh = await startServer({}, { login: false });
+    const out = join(fresh.dir, 'fresh.json');
+    const child = spawn(process.execPath, [join(ROOT, 'packages/cli/dist/verify.js'), '--url', fresh.url, '--user', 'admin', '--config', join(fresh.dir, 'missing.json'), '--json', out], { env: { ...process.env, SERVERCTL_CONFIG: join(fresh.dir, 'none') } });
+    child.stdin.end('irrelevant\n');
+    await new Promise((resolve) => child.on('close', resolve));
+    const r = JSON.parse(readFileSync(out, 'utf8')).results.find((x: any) => x.name === 'Authentication');
+    await fresh.stop().catch(() => undefined);
+    expect(r).toMatchObject({ status: 'FAIL', detail: expect.stringMatching(/no administrator exists yet.*setup token/) });
+  });
+});

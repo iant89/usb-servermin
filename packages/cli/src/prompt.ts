@@ -39,6 +39,8 @@ export function readHidden(prompt: string): Promise<string> {
       resolve(value);
     };
     const onData = (chunk: string) => {
+      // Drop terminal escape sequences (arrow keys, bracketed-paste markers) so they never become part of the password.
+      chunk = chunk.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[O]?[@-~]?/g, '');
       for (const ch of chunk) {
         if (ch === '\r' || ch === '\n' || ch === '\u0004') return finish();
         if (ch === '\u0003') return finish(true);

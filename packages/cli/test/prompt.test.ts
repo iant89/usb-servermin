@@ -53,4 +53,9 @@ describe('credential prompt on a real terminal', () => {
     expect(screen).toContain('RESULT=["admin","password"]');
     expect(screen.split('RESULT=')[0]).not.toContain('pas');
   });
+
+  it('ignores bracketed-paste markers and arrow keys', () => {
+    const screen = onTerminal(['\x1b[200~pa55word\x1b[201~\x1b[D\r'], 'admin');
+    expect(screen).toContain('RESULT=["admin","pa55word"]');
+  });
 });

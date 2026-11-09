@@ -192,13 +192,22 @@ async function authenticate(): Promise<string> {
       return `serverctl login (${file})`;
     }
   }
+  // Before asking for a password, make sure an account can exist at all.
+  const session = (await fetch(`${BASE}/api/v1/auth/session`).then((r) => r.json()).catch(() => ({}))) as { needsSetup?: boolean };
+  if (session.needsSetup) {
+    const tokenFile = join(config?.paths?.data ?? '/var/lib/servermin', 'setup-token');
+    fail(`no administrator exists yet: open ${BASE.replace('127.0.0.1', '<server-ip>')}/ in a browser, enter the setup token (sudo cat ${tokenFile}) and create the account, then run this again`);
+  }
   const [username, password] = await promptCredentials(value('user'));
   const res = await fetch(`${BASE}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-servermin-request': '1', origin: BASE },
     body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) fail(`sign-in failed: ${((await res.json().catch(() => ({}))) as any).error ?? res.status}`);
+  if (!res.ok) {
+    const error = ((await res.json().catch(() => ({}))) as any).error ?? `HTTP ${res.status}`;
+    fail(`sign-in as "${username}" failed: ${error}${res.status === 401 ? ' — check the username (Settings → Users) and password; 5 failures lock the account for 15 minutes' : ''}`);
+  }
   auth = { cookie: res.headers.get('set-cookie')!.split(';')[0] };
   return `password (${username})`;
 }
