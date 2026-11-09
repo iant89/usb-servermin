@@ -39,6 +39,7 @@ import { SettingsPage } from '../pages/Settings';
 import { NotFound } from '../pages/NotFound';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ModuleHost } from './ModuleHost';
+import { SavingIndicator, useSavingAnnouncements, type StorageStatus } from './SavingIndicator';
 import { loadFailures, onLoadFailure, syncModuleFrontends } from './module-loader';
 
 interface NotificationItem {
@@ -116,6 +117,9 @@ export function Shell({ session, onSessionChange, theme, onThemeChange }: { sess
       void refreshHealth();
     }
   });
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
+  useChannel<StorageStatus>('platform.storage', {}, setStorage);
+  useSavingAnnouncements(!!storage?.busy);
   useChannel<NotificationItem>('notifications', {}, (n) => {
     setNotifications((prev) => ({ items: [{ ...n, unread: true }, ...prev.items].slice(0, 50), unread: prev.unread + 1 }));
     toast.show({ title: n.title, description: n.message, tone: n.tone === 'information' ? 'neutral' : n.tone });
@@ -264,6 +268,7 @@ export function Shell({ session, onSessionChange, theme, onThemeChange }: { sess
       homeHref="/"
       context={[
         { id: 'status', priority: 10, align: 'end', content: <StatusIndicator tone={statusTone} indicator="dot" size="sm" role="status">{statusLabel}</StatusIndicator> },
+        ...(storage?.busy ? [{ id: 'saving', priority: 9, align: 'end' as const, content: <SavingIndicator status={storage} moduleNames={Object.fromEntries(modules.map((m) => [m.id, m.name]))} /> }] : []),
         ...(session.simulated ? [{ id: 'simulated', priority: 1, content: <StatusIndicator tone="warning" size="sm" indicator="dot">Simulated host actions</StatusIndicator> }] : []),
         ...indicators.map((s) => ({
           id: `${s.moduleId}:${s.id}`,

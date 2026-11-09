@@ -132,7 +132,8 @@ docs/         architecture, module development, security, operations
 - **Communication.** Modules never import each other. They publish and subscribe to events
   (`docker.container.started`, `*.metrics`, …) and call declared services through the core.
 - **Data.** The core owns all SQLite connections. Each module gets its own database file, so it cannot
-  touch core tables or another module's data.
+  touch core tables or another module's data. Disk-heavy work (module databases, log persistence,
+  checkpoints) runs on a separate storage thread, so slow USB flash cannot stall the server.
 - **UI.** Each module ships a frontend bundle that registers routes, navigation, dashboard widgets,
   commands and header status indicators at runtime. The shell hard-codes nothing about modules;
   when a module stops, its navigation, routes and widgets disappear.

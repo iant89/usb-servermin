@@ -205,7 +205,7 @@ export function registerCoreRoutes(router: Router, p: Platform) {
   router.post('/api/v1/platform/modules/:id/update', 'modules.install', (ctx) => modules.update(ctx.params.id, parseSource(ctx.body), actor(ctx)));
   router.get('/api/v1/platform/modules/:id/config', 'modules.read', (ctx) => modules.configFor(ctx.params.id));
   router.put('/api/v1/platform/modules/:id/config', 'modules.configure', (ctx) => modules.setConfig(ctx.params.id, (ctx.body ?? {}) as Record<string, unknown>, actor(ctx)));
-  router.get('/api/v1/platform/modules/:id/logs', 'modules.read', (ctx) =>
+  router.get('/api/v1/platform/modules/:id/logs', 'modules.read', async (ctx) =>
     logs.query({ module: ctx.params.id, level: (ctx.query.level as LogLevel) || undefined, search: ctx.query.search, before: Number(ctx.query.before) || undefined, limit: Number(ctx.query.limit) || 200 }),
   );
 

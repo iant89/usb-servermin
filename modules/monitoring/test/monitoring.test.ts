@@ -42,6 +42,9 @@ describe('monitoring module', () => {
   it('raises an alert after consecutive samples above the threshold', async () => {
     const t = createTestContext(manifest as any, { config: { memoryAlert: 1, alertAfterSamples: 2, cpuAlert: 0, diskAlert: 0 } });
     await t.start(monitoring);
+    // The first sample is taken in the background about a second after start.
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(t.notifications).toHaveLength(0);
     await t.tick();
     expect(t.notifications).toHaveLength(1);
     expect(t.notifications[0].title).toBe('Memory usage is high');

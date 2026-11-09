@@ -7,7 +7,7 @@
 | Program | `/opt/servermin` (`server/`, `shell/`, `modules/` bundled set, `cli/`, `bin/`, optional `node/`) |
 | Configuration | `/etc/servermin/config.json`, `/etc/servermin/privileged.conf` (optional) |
 | Data | `/var/lib/servermin` (`core.db`, `module-data/<id>/`, installed `modules/`) |
-| Logs | journald (`journalctl -u server-control`), `/var/log/servermin/servermin.log` (rotated), and the Logs module |
+| Logs | journald (`journalctl -u server-control`), the platform database (Logs module), and optionally `/var/log/servermin/servermin.log` (`logging.file: true`) |
 | Scratch | `/var/tmp/servermin` |
 | Privilege helper | `/usr/lib/servermin/servermin-privileged`, `/etc/sudoers.d/servermin` |
 | Service | `/etc/systemd/system/server-control.service` |
@@ -47,6 +47,24 @@ separate mount, add it to `RequiresMountsFor=` in the unit.
   the server stays reachable.
 - systemd restarts the service on failure (`Restart=on-failure`) and starts it after
   `network-online.target` once the data paths are mounted.
+
+## Slow storage (USB flash drives)
+
+Cheap USB flash drives, especially on USB 2.0, can take tens to hundreds of milliseconds for each
+small write that must reach the disk; a database makes many of them. Server Control keeps all of
+that on a separate storage thread, so the web interface stays responsive, but saving data, starting
+modules and Docker will still be slow on such a drive. `sudo servermin-verify` measures it
+("Disk speed") and warns below about 100 synced writes per second.
+
+What helps, in order:
+
+1. Run the installation from a USB 3 SSD (an M.2 or SATA SSD in a USB enclosure). It is just as
+   portable and typically a hundred times faster at this kind of write.
+2. Put the data directory on a faster disk of the machine: set `paths.data` and `paths.modules` in
+   `/etc/servermin/config.json` (and add the mount to `RequiresMountsFor=` in the unit). This trades
+   portability for speed: the data then stays with that machine.
+3. Keep the extra log file off (`logging.file`, off by default); journald and the database already
+   keep the logs.
 
 ## Backups (§49)
 

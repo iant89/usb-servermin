@@ -16,7 +16,8 @@ import {
 } from '@servermin/sdk';
 import type { AuditLog } from '../audit/audit';
 import type { CoreConfig } from '../config/config';
-import { Database } from '../database/database';
+import type { Database } from '../database/database';
+import type { ModuleDbClient, StorageClient } from '../storage/storage-client';
 import type { EventBus } from '../events/event-bus';
 import type { LogService } from '../logging/logger';
 import type { NotificationService } from '../notifications/notifications';
@@ -65,6 +66,7 @@ interface Deps {
   notifications: NotificationService;
   audit: AuditLog;
   hub: ChannelHub;
+  storage: StorageClient;
   workerScript: string;
   hostname: string;
 }
@@ -81,7 +83,6 @@ export class ModuleManager {
   readonly modules = new Map<string, ManagedModule>();
   readonly installer: ModuleInstaller;
   private queue: Promise<unknown> = Promise.resolve();
-  private dbs = new Map<string, Database>();
   private healthTimer: NodeJS.Timeout | null = null;
   private watchers = new Map<string, FSWatcher>();
   private log;
@@ -246,18 +247,13 @@ export class ModuleManager {
     return { ...configDefaults(m.manifest.config), ...(row ? JSON.parse(row.values) : {}) };
   }
 
-  moduleDb(id: string): Database {
-    let db = this.dbs.get(id);
-    if (!db) {
-      db = new Database(join(this.moduleDataDir(id), 'module.db'));
-      this.dbs.set(id, db);
-    }
-    return db;
+  /** The module's database lives on the storage thread; the core never blocks on its disk I/O. */
+  moduleDb(id: string): ModuleDbClient {
+    return this.d.storage.moduleDb(id, join(this.moduleDataDir(id), 'module.db'));
   }
 
   private closeDb(id: string) {
-    this.dbs.get(id)?.close();
-    this.dbs.delete(id);
+    return this.d.storage.closeModuleDb(id);
   }
 
   // ── Activation ─────────────────────────────────────────────────────────────────
@@ -310,7 +306,7 @@ export class ModuleManager {
         const message = errorMessage(e);
         await instance.shutdown(2000);
         if (m.instance === instance) m.instance = undefined;
-        this.closeDb(m.id);
+        await this.closeDb(m.id);
         this.fail(m, `Failed to start: ${message}`);
         return;
       }
@@ -356,7 +352,7 @@ export class ModuleManager {
       if (!r.graceful) this.mlog(m.id).warn(`Terminated after it failed to stop: ${r.error}`);
       m.instance = undefined;
     }
-    this.closeDb(m.id);
+    await this.closeDb(m.id);
     this.setState(m, next);
     if (wasRunning) this.d.bus.publish('module.unloaded', { moduleId: m.id });
   }
@@ -365,7 +361,7 @@ export class ModuleManager {
     const m = this.modules.get(id);
     if (!m || !m.instance) return;
     m.instance = undefined;
-    this.closeDb(m.id);
+    await this.closeDb(m.id);
     for (const dep of this.dependents(m)) if (dep.state === 'ACTIVE') await this.deactivate(dep, 'BLOCKED');
     this.fail(m, error);
   }
@@ -821,7 +817,6 @@ export class ModuleManager {
         m.state = 'STOPPED';
       }
     });
-    for (const id of [...this.dbs.keys()]) this.closeDb(id);
   }
 }
 

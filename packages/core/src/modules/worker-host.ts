@@ -200,11 +200,12 @@ const context: ModuleContext = {
     },
   },
   database: {
-    migrate: (migrations) => rpc.call('db.migrate', migrations),
-    run: (sql, params) => rpc.call('db.run', { sql, params }),
-    get: (sql, params) => rpc.call('db.get', { sql, params }),
-    all: (sql, params) => rpc.call('db.all', { sql, params }),
-    transaction: (statements) => rpc.call('db.transaction', statements),
+    // Generous timeouts: on slow media the storage thread may need a while; only this module waits.
+    migrate: (migrations) => rpc.call('db.migrate', migrations, 300_000),
+    run: (sql, params) => rpc.call('db.run', { sql, params }, 300_000),
+    get: (sql, params) => rpc.call('db.get', { sql, params }, 60_000),
+    all: (sql, params) => rpc.call('db.all', { sql, params }, 60_000),
+    transaction: (statements) => rpc.call('db.transaction', statements, 300_000),
   },
   process: {
     async execute(options) {

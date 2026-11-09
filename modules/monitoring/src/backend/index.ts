@@ -119,10 +119,13 @@ export default defineModule(() => {
       });
     },
     async start() {
-      // CPU usage and network rates need two readings; take a priming one so the first stored sample has them.
-      await sampler.sample();
-      await new Promise((r) => setTimeout(r, 1000));
-      await tick();
+      // Start returns at once; storing samples can be slow on USB flash and must not delay the module.
+      // CPU usage and network rates need two readings, so a priming reading comes first.
+      void (async () => {
+        await sampler.sample();
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!ctx.signal.aborted) await tick();
+      })().catch((e) => ctx.logger.warn(`First sample failed: ${(e as Error).message}`));
       stopSampling = ctx.tasks.interval('sample', Number(ctx.config.get().intervalSeconds) * 1000, tick);
       ctx.tasks.interval('retention', 3_600_000, async () => {
         const cutoff = Math.floor(Date.now() / 1000) - Number(ctx.config.get().retentionDays) * 86_400;
