@@ -348,12 +348,46 @@ async function hostChecks() {
   });
 }
 
+/** Explains who holds the web port and whether Server Control failed to bind it. */
+function diagnosePort(): string {
+  const hints: string[] = [];
+  const url = new URL(BASE);
+  const portNum = url.port || (url.protocol === 'https:' ? '443' : '80');
+  if (has('ss')) {
+    const ss = sh('ss', ['-H', '-ltnp', `sport = :${portNum}`]);
+    const procs = [...new Set([...ss.out.matchAll(/\(\("([^"]+)",pid=(\d+)/g)].map((m) => `${m[1]} (pid ${m[2]})`))];
+    if (procs.length) hints.push(`port ${portNum} is held by ${procs.join(', ')}`);
+    else if (ss.out) hints.push(`something listens on port ${portNum}${isRoot ? '' : ' (run with sudo to see which program)'}`);
+    else hints.push(`nothing listens on port ${portNum}`);
+  }
+  if (existsSync('/run/systemd/system') && has('journalctl')) {
+    const log = sh('journalctl', ['-u', 'server-control', '-b', '--no-pager', '-n', '300', '-o', 'cat']).out;
+    if (/EADDRINUSE/.test(log)) hints.push(`Server Control could not bind port ${portNum} (EADDRINUSE): stop the other program or reinstall with --port`);
+    const listening = [...log.matchAll(/Listening on ([^"\s]+)/g)].pop()?.[1];
+    if (listening) hints.push(`Server Control last reported listening on ${listening}`);
+  }
+  return hints.length ? ` — ${hints.join('; ')}` : '';
+}
+
 async function apiChecks() {
   group('Platform API');
 
   const health = await check('Web server reachable', async () => {
-    const r = await api('GET', '/api/v1/health', undefined, 5000).catch((e) => fail(`${BASE}: ${e.cause?.code ?? e.message}`));
-    assert(r.status === 200, `HTTP ${r.status}`);
+    const res = await fetch(`${BASE}/api/v1/health`, { signal: AbortSignal.timeout(5000) }).catch((e) => fail(`${BASE}: ${e.cause?.code ?? e.message}${diagnosePort()}`));
+    const text = await res.text();
+    let body: any = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      /* not JSON */
+    }
+    // Every Server Control response carries x-request-id; anything else means another program answered.
+    if (!res.headers.get('x-request-id') || res.status !== 200 || typeof body?.version !== 'string') {
+      const who = res.headers.get('server') ? `"${res.headers.get('server')}"` : 'a program that is not Server Control';
+      const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 80);
+      fail(`HTTP ${res.status} from ${who}${snippet ? ` (${snippet})` : ''}${diagnosePort()}`);
+    }
+    const r = { status: res.status, body };
     report.coreVersion = r.body.version;
     if (r.body.status !== 'HEALTHY') warn(`core ${r.body.version} reports ${r.body.status}`);
     return `core ${r.body.version}, ${r.body.status}`;

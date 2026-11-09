@@ -52,3 +52,18 @@ describe('servermin-verify', () => {
     expect(result('Configuration')).toMatchObject({ status: 'FAIL', detail: expect.stringMatching(/missing/) });
   });
 });
+
+describe('servermin-verify when another program owns the port', () => {
+  it('says who answered instead of a bare status code', async () => {
+    const { createServer } = await import('node:http');
+    const impostor = createServer((_req, res) => res.writeHead(404, { server: 'nginx/1.24.0 (Ubuntu)', 'content-type': 'text/html' }).end('<html><body><h1>404 Not Found</h1></body></html>'));
+    await new Promise<void>((r) => impostor.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(impostor.address() as any).port}`;
+    const out = join(s.dir, 'impostor.json');
+    await new Promise((resolve) => spawn(process.execPath, [join(ROOT, 'packages/cli/dist/verify.js'), '--url', url, '--token', 'smt_x', '--config', join(s.dir, 'missing.json'), '--json', out]).on('close', resolve));
+    impostor.close();
+    const r = JSON.parse(readFileSync(out, 'utf8')).results.find((x: any) => x.name === 'Web server reachable');
+    expect(r.status).toBe('FAIL');
+    expect(r.detail).toMatch(/^HTTP 404 from "nginx\/1\.24\.0 \(Ubuntu\)" \(<html><body><h1>404 Not Found/);
+  });
+});
