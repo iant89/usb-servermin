@@ -1,0 +1,20 @@
+{
+  "id": "services",
+  "name": "Services",
+  "version": "1.0.0",
+  "description": "systemd services: status, start, stop, restart, enable, disable and logs.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["systemd"],
+  "provides": ["services.systemd"],
+  "permissions": [
+    { "id": "services.read", "description": "View services and their logs" },
+    { "id": "services.write", "description": "Start, stop, restart, enable and disable services" }
+  ],
+  "events": { "publishes": ["service"] },
+  "host": { "commands": ["systemctl", "journalctl"], "privileged": ["service.start", "service.stop", "service.restart", "service.enable", "service.disable"] },
+  "config": [{ "key": "notifyFailures", "type": "boolean", "label": "Notify when a service fails", "default": true }],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 96 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

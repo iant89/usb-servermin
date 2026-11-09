@@ -1,0 +1,171 @@
+#!/bin/bash
+# Server Control privilege helper (§22).
+#
+# Installed root-owned at /usr/lib/servermin/servermin-privileged and allowed for the
+# "servermin" account through a single sudoers rule. It performs exactly one catalogued
+# operation per call. Arguments arrive as key=value pairs and are validated here again,
+# independently of the core, because this is the security boundary.
+set -euo pipefail
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C.UTF-8
+
+DATA_DIR=/var/lib/servermin
+STATE_DIR=/var/lib/servermin-helper
+NETPLAN_FILE=/etc/netplan/90-servermin.yaml
+[[ -r /etc/servermin/privileged.conf ]] && source /etc/servermin/privileged.conf
+
+die() { echo "servermin-privileged: $*" >&2; exit 2; }
+
+op="${1:-}"
+[[ -n "$op" ]] || die "usage: servermin-privileged <operation> [key=value ...]"
+shift
+
+declare -A A=()
+for kv in "$@"; do
+  [[ "$kv" == *=* ]] || die "arguments must be key=value"
+  k="${kv%%=*}"
+  v="${kv#*=}"
+  [[ "$k" =~ ^[a-z]{1,20}$ ]] || die "invalid argument name"
+  [[ -z "${A[$k]+x}" ]] || die "duplicate argument $k"
+  A[$k]="$v"
+done
+
+# require NAME REGEX: the argument must exist and match.
+require() { [[ -n "${A[$1]+x}" && "${A[$1]}" =~ $2 ]] || die "invalid or missing argument: $1"; }
+optional() { [[ -z "${A[$1]+x}" || "${A[$1]}" =~ $2 ]] || die "invalid argument: $1"; }
+no_dotdot() { [[ "$1" != *..* ]] || die "path must not contain .."; }
+only() {
+  local allowed=" $* "
+  for k in "${!A[@]}"; do [[ "$allowed" == *" $k "* ]] || die "unexpected argument $k"; done
+}
+
+UNIT_RE='^[A-Za-z0-9@_.:\\-]{1,200}\.(service|socket|timer|target|mount|path)$'
+DEVICE_RE='^/dev/[A-Za-z0-9/_.:-]{1,120}$'
+MOUNT_RE='^/(mnt|media|srv)/[A-Za-z0-9/_.@:+-]{1,200}$'
+PROTECTED_MOUNTS=" / /boot /boot/efi /usr /var /var/lib /etc /home /opt /var/lib/servermin /opt/servermin /var/lib/docker "
+
+case "$op" in
+  power.reboot)
+    only
+    exec systemctl reboot
+    ;;
+  power.shutdown)
+    only
+    exec systemctl poweroff
+    ;;
+  packages.refresh)
+    only
+    exec env DEBIAN_FRONTEND=noninteractive apt-get -q update
+    ;;
+  packages.upgrade)
+    only
+    exec env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+    ;;
+  system.set-hostname)
+    only hostname
+    require hostname '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+    exec hostnamectl set-hostname "${A[hostname]}"
+    ;;
+  system.set-timezone)
+    only timezone
+    require timezone '^[A-Za-z0-9_+/-]{1,64}$'
+    no_dotdot "${A[timezone]}"
+    [[ -f "/usr/share/zoneinfo/${A[timezone]}" ]] || die "unknown time zone"
+    exec timedatectl set-timezone "${A[timezone]}"
+    ;;
+  system.set-ntp)
+    only enabled
+    require enabled '^(true|false)$'
+    exec timedatectl set-ntp "${A[enabled]}"
+    ;;
+  service.start|service.stop|service.restart|service.enable|service.disable)
+    only unit
+    require unit "$UNIT_RE"
+    action="${op#service.}"
+    if [[ "${A[unit]}" == "server-control.service" && "$action" != "start" ]]; then die "refusing to $action Server Control itself"; fi
+    exec systemctl "$action" -- "${A[unit]}"
+    ;;
+  storage.mount)
+    only device target fstype readonly
+    require device "$DEVICE_RE"
+    require target "$MOUNT_RE"
+    optional fstype '^[a-z0-9]{2,16}$'
+    optional readonly '^(true|false)$'
+    no_dotdot "${A[device]}"
+    no_dotdot "${A[target]}"
+    [[ -b "${A[device]}" ]] || die "${A[device]} is not a block device"
+    if findmnt -rn -S "${A[device]}" >/dev/null; then die "${A[device]} is already mounted"; fi
+    if findmnt -rn -M "${A[target]}" >/dev/null; then die "${A[target]} is already a mount point"; fi
+    [[ ! -L "${A[target]}" ]] || die "mount point must not be a symbolic link"
+    mkdir -p -- "${A[target]}"
+    opts="nosuid,nodev"
+    [[ "${A[readonly]:-false}" == "true" ]] && opts="$opts,ro"
+    if [[ -n "${A[fstype]:-}" ]]; then exec mount -o "$opts" -t "${A[fstype]}" -- "${A[device]}" "${A[target]}"; fi
+    exec mount -o "$opts" -- "${A[device]}" "${A[target]}"
+    ;;
+  storage.unmount)
+    only target
+    require target '^/[A-Za-z0-9/_.@:+-]{0,250}$'
+    no_dotdot "${A[target]}"
+    target="${A[target]%/}"
+    [[ -n "$target" ]] || target=/
+    [[ "$PROTECTED_MOUNTS" != *" $target "* ]] || die "$target is protected"
+    findmnt -rn -M "$target" >/dev/null || die "$target is not mounted"
+    exec umount -- "$target"
+    ;;
+  storage.smart)
+    only device
+    require device "$DEVICE_RE"
+    no_dotdot "${A[device]}"
+    [[ -b "${A[device]}" ]] || die "${A[device]} is not a block device"
+    command -v smartctl >/dev/null || { echo "smartctl is not installed" >&2; exit 127; }
+    # smartctl uses exit bits for warnings; the JSON on stdout is what matters.
+    smartctl -H -A -i -j -- "${A[device]}" || true
+    exit 0
+    ;;
+  network.apply)
+    only file rollback
+    require file "^${DATA_DIR}/module-data/network/staged-netplan\.yaml$"
+    require rollback '^[0-9]{2,4}$'
+    (( ${A[rollback]} >= 30 && ${A[rollback]} <= 900 )) || die "rollback must be 30-900 seconds"
+    [[ -f "${A[file]}" && ! -L "${A[file]}" ]] || die "staged file missing"
+    command -v netplan >/dev/null || die "netplan is not installed"
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
+    systemctl stop servermin-network-rollback.timer >/dev/null 2>&1 || true
+    if [[ -f "$NETPLAN_FILE" ]]; then cp -p "$NETPLAN_FILE" "$STATE_DIR/netplan-backup.yaml"; else echo none > "$STATE_DIR/netplan-backup.none"; rm -f "$STATE_DIR/netplan-backup.yaml"; fi
+    install -m 600 -o root -g root -- "${A[file]}" "$NETPLAN_FILE"
+    if ! netplan generate; then
+      "$0" network.rollback >/dev/null 2>&1 || true
+      die "netplan rejected the configuration"
+    fi
+    # Schedule the automatic rollback before applying, so a lost connection always recovers.
+    systemd-run --quiet --unit=servermin-network-rollback --on-active="${A[rollback]}s" --timer-property=AccuracySec=1s /usr/lib/servermin/servermin-privileged network.rollback
+    netplan apply
+    echo "applied; rollback in ${A[rollback]}s unless confirmed"
+    ;;
+  network.confirm)
+    only
+    systemctl stop servermin-network-rollback.timer >/dev/null 2>&1 || true
+    rm -f "$STATE_DIR/netplan-backup.yaml" "$STATE_DIR/netplan-backup.none"
+    echo confirmed
+    ;;
+  network.rollback)
+    only
+    systemctl stop servermin-network-rollback.timer >/dev/null 2>&1 || true
+    if [[ -f "$STATE_DIR/netplan-backup.yaml" ]]; then
+      install -m 600 -o root -g root -- "$STATE_DIR/netplan-backup.yaml" "$NETPLAN_FILE"
+    elif [[ -f "$STATE_DIR/netplan-backup.none" ]]; then
+      rm -f "$NETPLAN_FILE"
+    else
+      die "nothing to roll back"
+    fi
+    rm -f "$STATE_DIR/netplan-backup.yaml" "$STATE_DIR/netplan-backup.none"
+    netplan apply
+    echo "rolled back"
+    ;;
+  *)
+    die "unknown operation: $op"
+    ;;
+esac

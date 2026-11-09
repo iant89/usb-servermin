@@ -1,0 +1,22 @@
+{
+  "id": "storage",
+  "name": "Storage",
+  "version": "1.0.0",
+  "description": "Disks, partitions, file systems, mounts, usage and disk health.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["disks", "partitions", "filesystems", "mounts", "smart"],
+  "permissions": [
+    { "id": "storage.read", "description": "View disks, file systems, mounts and health" },
+    { "id": "storage.write", "description": "Mount and unmount file systems" }
+  ],
+  "events": { "publishes": ["storage"] },
+  "host": { "commands": ["lsblk", "findmnt"], "privileged": ["storage.mount", "storage.unmount", "storage.smart"] },
+  "config": [
+    { "key": "mountRoots", "type": "string", "label": "Allowed mount locations", "description": "Comma-separated directories under which file systems may be mounted.", "default": "/mnt,/media,/srv" },
+    { "key": "warnPercent", "type": "number", "label": "Usage warning threshold (%)", "default": 90, "min": 50, "max": 99 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 96 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

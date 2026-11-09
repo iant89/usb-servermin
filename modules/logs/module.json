@@ -1,0 +1,17 @@
+{
+  "id": "logs",
+  "name": "Logs",
+  "version": "1.0.0",
+  "description": "Search, filter, follow and export system, service, application, Docker and module logs.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["journal", "search", "live-streaming", "export"],
+  "requires": [{ "capability": "docker.engine", "optional": true }],
+  "permissions": [{ "id": "logs.read", "description": "Read system, service and container logs" }],
+  "channels": [{ "name": "stream", "permission": "logs.read", "description": "Live journal entries (params: unit, priority)" }],
+  "host": { "commands": ["journalctl"] },
+  "config": [{ "key": "maxLines", "type": "number", "label": "Maximum lines per query", "default": 2000, "min": 100, "max": 20000 }],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 160 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

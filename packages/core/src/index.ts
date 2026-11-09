@@ -1,0 +1,13 @@
+export { Platform, type PlatformOptions } from './platform';
+export { loadConfig, defaultConfig, mergeConfig, type CoreConfig } from './config/config';
+export { EventBus } from './events/event-bus';
+export { Database, CORE_MIGRATIONS } from './database/database';
+export { ProcessService, ProcessError } from './process/process-service';
+export { ModuleInstaller, InstallError, verifyIntegrity, sha256File } from './modules/installer';
+export { ModuleManager, ModuleError } from './modules/module-manager';
+export { AuthService } from './auth/auth-service';
+export { hashPassword, verifyPassword } from './auth/passwords';
+export { AttemptLimiter, TokenBucket } from './auth/rate-limit';
+export { LogService } from './logging/logger';
+export { AuditLog } from './audit/audit';
+export { CORE_VERSION } from './version';

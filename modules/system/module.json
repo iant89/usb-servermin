@@ -1,0 +1,29 @@
+{
+  "id": "system",
+  "name": "System",
+  "version": "1.0.0",
+  "description": "Operating system, hardware, processes, updates, time, hostname and power.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["os-info", "hardware", "processes", "updates", "power", "time"],
+  "provides": ["system.info"],
+  "permissions": [
+    { "id": "system.read", "description": "View system information, processes and available updates" },
+    { "id": "system.write", "description": "Change hostname, time zone and time synchronisation" },
+    { "id": "system.update", "description": "Refresh the package index and install updates" },
+    { "id": "system.power", "description": "Reboot and shut down the server" }
+  ],
+  "channels": [{ "name": "metrics", "permission": "system.read", "description": "CPU, memory and load every two seconds" }],
+  "events": { "publishes": ["system"] },
+  "host": {
+    "commands": ["apt", "timedatectl", "lspci"],
+    "privileged": ["power.reboot", "power.shutdown", "packages.refresh", "packages.upgrade", "system.set-hostname", "system.set-timezone", "system.set-ntp"]
+  },
+  "config": [
+    { "key": "metricsIntervalMs", "type": "number", "label": "Live metrics interval (ms)", "default": 2000, "min": 500, "max": 60000 },
+    { "key": "eventIntervalMs", "type": "number", "label": "Metrics event interval (ms)", "description": "How often system.metrics.updated is published for other modules.", "default": 10000, "min": 1000, "max": 300000 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 96 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

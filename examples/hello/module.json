@@ -1,0 +1,21 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "description": "Minimal example module that shows every extension point of the module SDK.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["example"],
+  "permissions": [
+    { "id": "hello.read", "description": "Read greetings" },
+    { "id": "hello.write", "description": "Post greetings" }
+  ],
+  "channels": [{ "name": "ticks", "permission": "hello.read", "description": "A counter that ticks every second" }],
+  "config": [
+    { "key": "greeting", "type": "string", "label": "Greeting", "default": "Hello", "max": 40, "required": true },
+    { "key": "tickMs", "type": "number", "label": "Tick interval (ms)", "default": 1000, "min": 250, "max": 10000 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 64 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

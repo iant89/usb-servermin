@@ -1,0 +1,23 @@
+{
+  "id": "monitoring",
+  "name": "Monitoring",
+  "version": "1.0.0",
+  "description": "Historical and real-time metrics for CPU, memory, disk, network, load and processes, plus metrics contributed by other modules.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["metrics", "history", "alerts"],
+  "permissions": [{ "id": "monitoring.read", "description": "View metrics and their history" }],
+  "channels": [{ "name": "live", "permission": "monitoring.read", "description": "Every new sample" }],
+  "events": { "publishes": ["monitoring"], "subscribes": ["*.metrics"] },
+  "config": [
+    { "key": "intervalSeconds", "type": "number", "label": "Sample interval (seconds)", "default": 15, "min": 5, "max": 300 },
+    { "key": "retentionDays", "type": "number", "label": "Keep history for (days)", "default": 14, "min": 1, "max": 365 },
+    { "key": "cpuAlert", "type": "number", "label": "CPU alert threshold (%)", "description": "0 disables the alert.", "default": 90, "min": 0, "max": 100 },
+    { "key": "memoryAlert", "type": "number", "label": "Memory alert threshold (%)", "default": 90, "min": 0, "max": 100 },
+    { "key": "diskAlert", "type": "number", "label": "Root disk alert threshold (%)", "default": 90, "min": 0, "max": 100 },
+    { "key": "alertAfterSamples", "type": "number", "label": "Alert after consecutive samples", "default": 4, "min": 1, "max": 100 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 128 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

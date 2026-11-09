@@ -1,0 +1,8 @@
+{
+  "name": "@servermin/cli",
+  "version": "1.0.0",
+  "description": "serverctl: command-line client for the Server Control platform API.",
+  "type": "module",
+  "private": true,
+  "bin": { "serverctl": "./dist/serverctl.js" }
+}

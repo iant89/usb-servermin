@@ -1,0 +1,21 @@
+{
+  "id": "network",
+  "name": "Network",
+  "version": "1.0.0",
+  "description": "Interfaces, addresses, routes, DNS and gateways, with safe reconfiguration that rolls back automatically.",
+  "author": "Server Control",
+  "apiVersion": 1,
+  "coreVersion": "^1.0.0",
+  "capabilities": ["interfaces", "routes", "dns", "netplan"],
+  "permissions": [
+    { "id": "network.read", "description": "View interfaces, addresses, routes and DNS" },
+    { "id": "network.write", "description": "Change interface configuration" }
+  ],
+  "events": { "publishes": ["network"] },
+  "host": { "commands": ["ip", "resolvectl"], "privileged": ["network.apply", "network.confirm", "network.rollback"] },
+  "config": [
+    { "key": "rollbackSeconds", "type": "number", "label": "Automatic rollback after (seconds)", "description": "A new configuration is reverted unless you confirm it within this time.", "default": 120, "min": 30, "max": 900 }
+  ],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 96 },
+  "frontend": { "entry": "dist/frontend.js" }
+}

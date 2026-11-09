@@ -1,0 +1,5 @@
+#!/bin/sh
+# serverctl: command-line client for the Server Control API.
+set -e
+. "$(dirname "$(readlink -f "$0")")/node-launcher.sh"
+exec "$NODE" "$APP/cli/serverctl.js" "$@"

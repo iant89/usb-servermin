@@ -1,0 +1,11 @@
+{
+  "name": "@servermin/sdk",
+  "version": "1.0.0",
+  "description": "Module development SDK for the Server Control platform: contract, manifest, context and testing utilities.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  }
+}

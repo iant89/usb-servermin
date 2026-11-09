@@ -1,0 +1,52 @@
+{
+  "name": "servermin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Modular Ubuntu Server Control Platform: a small core plus independently installable modules, administered from the browser.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "packages/*",
+    "modules/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "build:modules": "node tools/build.mjs --modules-only",
+    "dev": "node tools/dev.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --project integration",
+    "check": "npm run typecheck && npm run test",
+    "package": "node tools/package.mjs",
+    "update-enterprise-ui": "bash tools/update-enterprise-ui.sh"
+  },
+  "dependencies": {
+    "@enterprise-ui/react": "file:vendor/enterprise-ui-react-0.1.0.tgz",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^29.1.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "servermin": {
+    "nodeVersion": "v22.23.4"
+  }
+}

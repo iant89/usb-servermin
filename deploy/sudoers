@@ -1,0 +1,4 @@
+# Server Control: the service account may run exactly one program as root, the privilege
+# helper, which accepts only the catalogued operations and validates every argument.
+Defaults:servermin !requiretty
+servermin ALL=(root) NOPASSWD: /usr/lib/servermin/servermin-privileged

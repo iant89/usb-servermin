@@ -1,0 +1,10 @@
+{
+  "id": "faulty",
+  "name": "Faulty",
+  "version": "1.0.0",
+  "description": "Test fixture that fails on demand.",
+  "apiVersion": 1,
+  "permissions": [{ "id": "faulty.use", "description": "Use the faulty module" }],
+  "config": [{ "key": "failOnStart", "type": "boolean", "label": "Fail on start", "default": false }],
+  "backend": { "entry": "dist/backend.js", "maxMemoryMb": 64 }
+}
