@@ -14,7 +14,19 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { createInterface } from 'node:readline/promises';
+import { promptCredentials } from './prompt';
+
+const USAGE = `serverctl — talks to the platform REST API; it never duplicates platform logic (§37).
+
+  serverctl login [--url URL] [--token TOKEN]     store credentials (~/.config/serverctl.json)
+  serverctl status
+  serverctl module list | info <id> | discover
+  serverctl module install <path|file.tgz|git-url> [--ref REF] [--sha256 SUM]
+  serverctl module update <id> <path|file.tgz|git-url>
+  serverctl module remove <id> [--delete-data]
+  serverctl module enable|disable|reload|restart <id>
+  serverctl module logs <id> [--level LEVEL] [--limit N]
+  serverctl module config <id> [key=value ...]\n`;
 
 interface Credentials {
   url: string;
@@ -83,31 +95,11 @@ function sourceFor(arg: string, args: string[]) {
   return { body: { source: 'directory', path } };
 }
 
-/** Reads username and password from the terminal (password hidden) or from piped stdin. */
-async function promptCredentials(): Promise<[string, string]> {
-  if (!process.stdin.isTTY) {
-    const lines: string[] = [];
-    for await (const line of createInterface({ input: process.stdin })) if (lines.push(line) === 2) break;
-    if (lines.length < 2) fail('Expected a username and a password on standard input');
-    return [lines[0].trim(), lines[1]];
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  const username = (await rl.question('Username: ')).trim();
-  const output = rl as unknown as { _writeToOutput(s: string): void };
-  const original = output._writeToOutput.bind(rl);
-  process.stdout.write('Password: ');
-  output._writeToOutput = (s: string) => (s.includes('\n') || s.includes('\r') ? original('\n') : undefined);
-  const password = await rl.question('');
-  output._writeToOutput = original;
-  rl.close();
-  return [username, password];
-}
-
 async function login(args: string[]) {
   const url = flag(args, 'url') ?? process.env.SERVERCTL_URL ?? 'http://127.0.0.1';
   let token = flag(args, 'token');
   if (!token) {
-    const [username, password] = await promptCredentials();
+    const [username, password] = await promptCredentials().catch((e) => fail(e.message));
     const res = await fetch(new URL('/api/v1/auth/login', url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-servermin-request': '1' }, body: JSON.stringify({ username, password }) });
     if (!res.ok) fail((await res.json().catch(() => ({}))).error ?? 'Login failed');
     const cookie = res.headers.get('set-cookie')?.split(';')[0];
@@ -125,7 +117,7 @@ async function main() {
   const args = process.argv.slice(2);
   const [cmd, sub, ...rest] = args;
   if (!cmd || cmd === 'help' || cmd === '--help') {
-    console.log(readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].split('\n').slice(1).map((l) => l.replace(/^ \* ?/, '')).join('\n'));
+    process.stdout.write(USAGE);
     return;
   }
   if (cmd === 'login') return login(args.slice(1));

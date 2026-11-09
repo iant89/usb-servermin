@@ -7,3 +7,4 @@ release/
 .vitest-tmp/
 modules/*/integrity.json
 examples/*/integrity.json
+.cache/

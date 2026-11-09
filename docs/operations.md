@@ -39,8 +39,9 @@ separate mount, add it to `RequiresMountsFor=` in the unit.
 - Nothing is tied to the hardware: interfaces, disks, CPUs and GPUs are discovered on every start and
   nothing refers to `eth0`, `sda` or a MAC address. The Storage module marks the disk that holds `/`
   as the system disk so it is never offered for mounting.
-- Bundle Node.js in the release (`npm run package -- --node <dir>`) so the stick does not depend on
-  the host's packages. The launcher prefers `/opt/servermin/node/bin/node`.
+- Bundle Node.js in the release (`npm run package -- --bundle-node`) so the stick does not depend on
+  the host's packages. The launchers in `/opt/servermin/bin` prefer `/opt/servermin/node/bin/node`.
+- After moving the stick, run `sudo servermin-verify` and follow [the hardware checklist](hardware-checklist.md).
 - Network settings managed by Server Control are stored per interface name. On another machine the
   names may differ; interfaces it does not manage keep the distribution's default (usually DHCP), so
   the server stays reachable.

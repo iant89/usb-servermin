@@ -29,7 +29,7 @@ export async function buildCore(outdir = join(root, 'packages/core/dist')) {
     external: ['bufferutil', 'utf-8-validate'],
   });
   await esbuild.build({
-    entryPoints: { serverctl: join(root, 'packages/cli/src/main.ts') },
+    entryPoints: { serverctl: join(root, 'packages/cli/src/main.ts'), verify: join(root, 'packages/cli/src/verify.ts') },
     outdir: join(root, 'packages/cli/dist'),
     bundle: true,
     platform: 'node',

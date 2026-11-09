@@ -25,7 +25,7 @@ done
 
 if [[ $UNINSTALL -eq 1 ]]; then
   systemctl disable --now server-control.service 2>/dev/null || true
-  rm -f /etc/systemd/system/server-control.service /etc/sudoers.d/servermin /usr/local/bin/serverctl
+  rm -f /etc/systemd/system/server-control.service /etc/sudoers.d/servermin /usr/local/bin/serverctl /usr/local/bin/servermin-verify
   rm -rf "$APP" /usr/lib/servermin
   systemctl daemon-reload
   echo "Removed. Data in /var/lib/servermin and configuration in /etc/servermin were kept."
@@ -38,7 +38,7 @@ if [[ -x "$SRC/node/bin/node" ]]; then NODE="$SRC/node/bin/node"; elif command -
 if [[ -z "$NODE" ]] || ! "$NODE" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=13)?0:1)'; then
   echo "Node.js 22.13 or newer is required (it provides the built-in SQLite driver)." >&2
   echo "Install it, for example:  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs" >&2
-  echo "or build the release with a bundled runtime: npm run package -- --node /path/to/node" >&2
+  echo "or use a release built with a bundled runtime: npm run package -- --bundle-node" >&2
   exit 1
 fi
 for cmd in sudo python3 tar; do command -v "$cmd" >/dev/null || { echo "Missing $cmd (apt-get install -y $cmd)" >&2; exit 1; }; done
@@ -79,16 +79,17 @@ if [[ -n "$PORT" ]]; then
   "$NODE" -e 'const f="/etc/servermin/config.json",fs=require("fs"),c=JSON.parse(fs.readFileSync(f));c.http.port=Number(process.argv[1]);fs.writeFileSync(f,JSON.stringify(c,null,2))' "$PORT"
 fi
 for d in /var/lib/servermin /var/log/servermin /var/tmp/servermin /var/lib/servermin/module-sources; do install -d -m 750 -o servermin -g servermin "$d"; done
-[[ "$NODE" != "$APP/node/bin/node" && ! -x "$APP/node/bin/node" ]] && echo "NODE_PATH_HINT=$NODE" > /etc/servermin/environment
 
-ln -sf "$APP/cli/serverctl.js" /usr/local/bin/serverctl
-chmod 755 "$APP/cli/serverctl.js"
+ln -sf "$APP/bin/serverctl" /usr/local/bin/serverctl
+ln -sf "$APP/bin/servermin-verify" /usr/local/bin/servermin-verify
 install -m 644 "$SRC/deploy/server-control.service" /etc/systemd/system/server-control.service
 systemctl daemon-reload
 systemctl enable --now server-control.service
 
 echo
 echo "Server Control is running:  systemctl status server-control"
+echo "Runtime: $([[ -x $APP/node/bin/node ]] && echo "bundled Node.js $($APP/node/bin/node --version)" || echo "system Node.js $($NODE --version)")"
+echo "Check the installation:   sudo servermin-verify"
 sleep 2
 if [[ -f /var/lib/servermin/setup-token ]]; then
   echo "Open http://$(hostname -I | awk '{print $1}')${PORT:+:$PORT}/ and enter the setup token: $(cat /var/lib/servermin/setup-token)"

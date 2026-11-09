@@ -18,10 +18,10 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
-      - run: npm run package
+      - run: npm run package -- --bundle-node --arch x64,arm64
       - uses: actions/upload-artifact@v4
         with:
           name: release
           path: |
-            release/*.tar.gz
+            release/*.tar.gz*
             release/modules/*.tgz*

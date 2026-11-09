@@ -61,7 +61,7 @@ Other commands:
 | `npm run build` | Build the core, CLI, web shell and all modules |
 | `npm run typecheck` | Type-check everything |
 | `npm test` | Unit, module and integration tests |
-| `npm run package` | Build `release/servermin-<version>.tar.gz` and installable module packages in `release/modules/` |
+| `npm run package` | Build `release/servermin-<version>.tar.gz` and installable module packages in `release/modules/`; add `-- --bundle-node` to include Node.js |
 | `npm run update-enterprise-ui` | Rebuild the vendored ENTERPRISE-UI package from a sibling checkout |
 
 ## Install on Ubuntu Server
@@ -81,7 +81,18 @@ The installer creates the `servermin` service account, installs to `/opt/serverm
 `server-control.service`. It prints the address and the one-time setup token.
 
 For a portable USB installation, bundle the Node.js runtime so the stick does not depend on the
-host: `npm run package -- --node /path/to/node-v22.x-linux-x64`. See [Operations](docs/operations.md).
+host's packages: `npm run package -- --bundle-node [--arch x64,arm64]` downloads the pinned
+official build (`servermin.nodeVersion` in `package.json`), verifies its SHA-256 and includes it.
+
+After installing, check everything end to end on the server:
+
+```bash
+sudo servermin-verify --user admin            # host setup, privilege boundary, every module (changes nothing)
+sudo servermin-verify --user admin --docker   # plus opt-in checks: --mount, --service, --updates, --network-rollback
+```
+
+The [real-hardware checklist](docs/hardware-checklist.md) covers the rest: reboots, moving the stick
+to another machine, and network rollback with a console attached.
 
 ## Repository layout
 

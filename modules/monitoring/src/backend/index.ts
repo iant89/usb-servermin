@@ -119,6 +119,9 @@ export default defineModule(() => {
       });
     },
     async start() {
+      // CPU usage and network rates need two readings; take a priming one so the first stored sample has them.
+      await sampler.sample();
+      await new Promise((r) => setTimeout(r, 1000));
       await tick();
       stopSampling = ctx.tasks.interval('sample', Number(ctx.config.get().intervalSeconds) * 1000, tick);
       ctx.tasks.interval('retention', 3_600_000, async () => {

@@ -1,0 +1,5 @@
+#!/bin/sh
+# servermin-verify: checks a real installation end to end. Run with sudo on the server.
+set -e
+. "$(dirname "$(readlink -f "$0")")/node-launcher.sh"
+exec "$NODE" "$APP/cli/verify.js" "$@"
