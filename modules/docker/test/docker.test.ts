@@ -90,6 +90,28 @@ describe('docker module', () => {
     server.close();
   });
 
+  it('tracks health across a socket change without stale or duplicate connections', async () => {
+    const socket = join(dir, 'docker.sock');
+    const { server, calls } = await fakeEngine(socket);
+    const t = createTestContext(manifest as any, { config: { socketPath: socket }, dataDir: dir });
+    await t.start(docker);
+    expect((await t.runHealthChecks())[0].status).toBe('HEALTHY');
+    t.setConfig({ socketPath: join(dir, 'missing.sock') });
+    // Health must not keep reporting the old, healthy connection while the new one is attempted.
+    expect((await t.runHealthChecks())[0].status).not.toBe('HEALTHY');
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await t.runHealthChecks())[0]).toMatchObject({ status: 'ERROR', message: expect.stringMatching(/Unable to communicate/) });
+    // Switching back reconnects once; the closed stream must not flip health back to ERROR.
+    t.setConfig({ socketPath: socket });
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await t.runHealthChecks())[0].status).toBe('HEALTHY');
+    await new Promise((r) => setTimeout(r, 2500));
+    expect((await t.runHealthChecks())[0].status).toBe('HEALTHY');
+    expect(calls.filter((c) => c.startsWith('GET /events')).length).toBe(2);
+    await t.stop();
+    server.close();
+  });
+
   it('reports ERROR health when Docker Engine is unreachable, without failing', async () => {
     const t = createTestContext(manifest as any, { config: { socketPath: join(dir, 'missing.sock') }, dataDir: dir });
     await t.start(docker);

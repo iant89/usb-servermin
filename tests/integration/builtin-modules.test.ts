@@ -37,9 +37,16 @@ describe('built-in modules (§32)', () => {
   });
 
   it('keeps the platform up when Docker Engine is unreachable (§60)', async () => {
+    // On hosts with a running Docker daemon (CI runners) the module starts out healthy; reconnecting
+    // to the new socket is asynchronous, so wait for the health check to report it.
     await s.api('PUT', '/api/v1/platform/modules/docker/config', { socketPath: '/nonexistent/docker.sock' });
-    await s.platform.modules.checkHealth();
-    const docker = (await s.api('GET', '/api/v1/platform/modules/docker')).body;
+    const docker = await waitFor(
+      async () => {
+        await s.platform.modules.checkHealth();
+        return (await s.api('GET', '/api/v1/platform/modules/docker')).body;
+      },
+      (m: any) => m.health.status === 'ERROR',
+    );
     expect(docker.state).toBe('ACTIVE');
     expect(docker.health).toMatchObject({ status: 'ERROR' });
     expect(docker.health.message).toMatch(/Unable to communicate with Docker Engine/);

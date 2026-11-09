@@ -28,6 +28,8 @@ export default defineModule(() => {
   let stopEvents: (() => void) | null = null;
   let reconnect: NodeJS.Timeout | null = null;
   let retryMs = 2000;
+  /** Incremented on every (re)connect, so callbacks of a superseded connection are ignored. */
+  let generation = 0;
   const logStreams = new Map<string, () => void>();
 
   const containers = async (all = true) => (await docker.json<any[]>('GET', `/containers/json${q({ all: all ? 1 : 0 })}`)).map(summarizeContainer);
@@ -116,10 +118,12 @@ export default defineModule(() => {
   /** Follow /events: publish platform events (§17) and broadcast to the channel. */
   async function connectEvents() {
     if (reconnect) clearTimeout(reconnect);
+    const gen = ++generation;
     try {
       await docker.ping();
+      if (gen !== generation) return;
       let buf = '';
-      stopEvents = await docker.stream(
+      const stop = await docker.stream(
         `/events${q({ since: Math.floor(Date.now() / 1000) })}`,
         (chunk) => {
           buf += chunk.toString();
@@ -135,16 +139,22 @@ export default defineModule(() => {
           }
         },
         () => {
+          if (gen !== generation) return;
           stopEvents = null;
           if (!ctx.signal.aborted) scheduleReconnect('Docker event stream ended');
         },
       );
+      if (gen !== generation) {
+        stop();
+        return;
+      }
+      stopEvents = stop;
       if (health.status !== 'HEALTHY') ctx.logger.info('Connected to Docker Engine');
       health = { status: 'HEALTHY' };
       retryMs = 2000;
       ctx.events.publish('docker.engine.connected', {});
     } catch (e) {
-      scheduleReconnect((e as Error).message);
+      if (gen === generation) scheduleReconnect((e as Error).message);
     }
   }
 
@@ -313,7 +323,12 @@ export default defineModule(() => {
       ctx.config.onChange((values, keys) => {
         if (!keys.includes('socketPath')) return;
         docker.socketPath = String(values.socketPath);
+        // The old connection no longer says anything about the new socket.
+        generation++;
         stopEvents?.();
+        stopEvents = null;
+        health = { status: 'DEGRADED', message: `Connecting to Docker Engine at ${values.socketPath}` };
+        retryMs = 2000;
         void connectEvents();
       });
     },
