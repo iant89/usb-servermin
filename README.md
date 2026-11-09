@@ -37,7 +37,7 @@ The UI is built with [ENTERPRISE-UI](https://github.com/iant89/ENTERPRISE-UI) on
 - [Writing a module](#writing-a-module)
 - [CLI](#cli)
 - [Testing](#testing)
-- Further reading: [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md)
+- Further reading: [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md) · [Releases and updates](docs/releases.md)
 
 ## Quick start (development)
 
@@ -62,6 +62,8 @@ Other commands:
 | `npm run typecheck` | Type-check everything |
 | `npm test` | Unit, module and integration tests |
 | `npm run package` | Build `release/servermin-<version>.tar.gz` and installable module packages in `release/modules/`; add `-- --bundle-node` to include Node.js |
+| `npm run release:keygen` | Create the release signing key (once; see [docs/releases.md](docs/releases.md)) |
+| `npm run set-version -- X.Y.Z` | Set the version before tagging a release |
 | `npm run update-enterprise-ui` | Rebuild the vendored ENTERPRISE-UI package from a sibling checkout |
 
 ## Install on Ubuntu Server
@@ -90,6 +92,11 @@ After installing, check everything end to end on the server:
 sudo servermin-verify --user admin            # host setup, privilege boundary, every module (changes nothing)
 sudo servermin-verify --user admin --docker   # plus opt-in checks: --mount, --service, --updates, --network-rollback
 ```
+
+Once installed, a server updates itself from signed GitHub releases: Settings → Updates (or
+`serverctl update`) checks daily, installs on request or automatically in a maintenance window, and
+rolls back if the new version does not start. Publishing a release is `npm run set-version`, a tag
+and a push; see [docs/releases.md](docs/releases.md).
 
 The [real-hardware checklist](docs/hardware-checklist.md) covers the rest: reboots, moving the stick
 to another machine, and network rollback with a console attached.
@@ -199,6 +206,11 @@ serverctl module enable | disable | reload | restart <id>
 serverctl module remove <id> [--delete-data]
 serverctl module logs <id> [--level WARN] [--limit 200]
 serverctl module config <id> [key=value …]
+serverctl update [check]                  # installed and latest version, module updates
+serverctl update apply [--yes]            # install the latest release (restart, rollback on failure)
+serverctl update module <id>              # install one module package from the latest release
+serverctl update auto on|off [--window 03:00]
+serverctl update rollback [--yes]
 ```
 
 ## Testing

@@ -11,6 +11,7 @@ import { ModuleError } from '../modules/module-manager';
 import { RpcError } from '../modules/rpc';
 import { ProcessError } from '../process/process-service';
 import type { Platform } from '../platform';
+import { UpdateError } from '../updates/update-service';
 import { SESSION_COOKIE, registerCoreRoutes } from './api';
 import { Router } from './router';
 import { ApiError, clientIp, newRequestId, parseCookies, readJson, sendJson, sendRaw, type RequestContext } from './util';
@@ -52,6 +53,7 @@ export function errorStatus(e: unknown): { status: number; body: Record<string, 
   if (e instanceof ModuleError) return { status: e.status, body: { error: e.message, problems: e.problems } };
   if (e instanceof InstallError) return { status: e.status, body: { error: e.message, problems: e.problems } };
   if (e instanceof ProcessError) return { status: e.status, body: { error: e.message } };
+  if (e instanceof UpdateError) return { status: e.status, body: { error: e.message } };
   if (e instanceof RpcError) return { status: e.status ?? 502, body: { error: e.message, details: e.details } };
   return { status: 500, body: { error: 'Internal server error' } };
 }

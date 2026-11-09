@@ -390,6 +390,13 @@ async function hostChecks() {
     return 'root-owned helper reachable by servermin without a password; no other sudo access';
   });
 
+  await check('Updates', () => {
+    if (!existsSync(join(APP, 'bin/servermin-update'))) warn('this release has no updater; install a newer release with install.sh to get updates without rebuilding');
+    if (!existsSync(join(APP, 'release-signing.pub'))) warn(`${APP}/release-signing.pub is missing — this build was not signed, so it cannot verify or install updates`);
+    if (!existsSync('/var/tmp/servermin/updates')) warn('/var/tmp/servermin/updates is missing; rerun install.sh');
+    return `updater and release signing key present${existsSync(`${APP}.previous`) ? '; previous version kept for rollback' : ''}`;
+  });
+
   await check('Host tools', () => {
     const required = ['python3', 'ip', 'lsblk', 'findmnt', 'journalctl', 'systemctl', 'sudo', 'tar'];
     const optional = ['netplan', 'docker', 'smartctl', 'timedatectl', 'hostnamectl'];

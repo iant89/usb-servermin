@@ -58,6 +58,14 @@ export interface CoreConfig {
     loginAttempts: number;
     lockoutMinutes: number;
   };
+  /** Updates from signed GitHub releases. Only settable in the file: where updates come from is not a runtime setting. */
+  updates: {
+    enabled: boolean;
+    /** owner/name of the GitHub repository that publishes releases. */
+    repository: string;
+    apiBase: string;
+    checkIntervalHours: number;
+  };
   /** Development mode: relaxed CSP for the Vite dev server, verbose errors. */
   dev: boolean;
 }
@@ -86,6 +94,7 @@ export function defaultConfig(base = '/'): CoreConfig {
     privileged: { mode: 'sudo', helper: p('usr/lib/servermin/servermin-privileged') },
     logging: { level: 'INFO', retentionDays: 14, stdout: true, file: false },
     auth: { sessionHours: 12, secureCookies: 'auto', loginAttempts: 5, lockoutMinutes: 15 },
+    updates: { enabled: true, repository: 'iant89/usb-servermin', apiBase: 'https://api.github.com', checkIntervalHours: 24 },
     dev: false,
   };
 }
@@ -135,6 +144,9 @@ export function validateConfig(config: CoreConfig): CoreConfig {
   for (const [k, v] of Object.entries(config.paths)) if (!isAbsolute(v)) problems.push(`paths.${k} must be absolute`);
   if (!['sudo', 'simulate', 'disabled'].includes(config.privileged.mode)) problems.push('privileged.mode must be sudo, simulate or disabled');
   if (!['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(config.logging.level)) problems.push('logging.level is invalid');
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.updates.repository)) problems.push('updates.repository must be owner/name');
+  if (!/^https?:\/\//.test(config.updates.apiBase)) problems.push('updates.apiBase must be an http(s) URL');
+  if (!(config.updates.checkIntervalHours >= 1)) problems.push('updates.checkIntervalHours must be at least 1');
   if (problems.length) throw new Error(`Invalid configuration:\n  ${problems.join('\n  ')}`);
   return config;
 }

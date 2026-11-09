@@ -17,7 +17,7 @@ export interface TestServer {
 }
 
 /** Starts a real platform (HTTP, workers, SQLite) in a temporary directory and signs in as admin. */
-export async function startServer(overrides: Partial<CoreConfig['modules']> = {}, opts: { login?: boolean; storageWriteDelayMs?: number } = {}): Promise<TestServer> {
+export async function startServer(overrides: Partial<CoreConfig['modules']> = {}, opts: { login?: boolean; storageWriteDelayMs?: number; config?: Record<string, unknown>; beforeStart?: (dir: string, config: CoreConfig) => void } = {}): Promise<TestServer> {
   const dir = mkdtempSync(join(tmpdir(), 'servermin-it-'));
   const base = defaultConfig(dir);
   const config = mergeConfig(base, {
@@ -26,7 +26,10 @@ export async function startServer(overrides: Partial<CoreConfig['modules']> = {}
     modules: { preinstall: [], sources: [join(ROOT, 'examples'), join(ROOT, 'tests/fixtures')], lifecycleTimeoutMs: 5000, healthIntervalMs: 60_000, ...overrides },
     privileged: { mode: 'simulate' },
     logging: { level: 'DEBUG', stdout: false },
+    updates: { enabled: false },
   } as any);
+  if (opts.config) Object.assign(config, mergeConfig(config, opts.config as any));
+  opts.beforeStart?.(dir, config);
   const platform = new Platform(config, { workerScript: join(ROOT, '.vitest-tmp/core/module-host.js'), storageScript: join(ROOT, '.vitest-tmp/core/storage-host.js'), storageWriteDelayMs: opts.storageWriteDelayMs });
   const quiet = process.stdout.write;
   process.stdout.write = (() => true) as any;

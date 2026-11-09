@@ -74,7 +74,10 @@ log, and module data such as application and deployment definitions. A backup mo
 
 ## Upgrades
 
-- Core: unpack a new release and run `sudo ./install.sh`; data and configuration are kept.
+- Core: Settings → Updates installs signed releases from GitHub, with a database backup and automatic
+  rollback (see [releases.md](releases.md)). Manual alternative: unpack a new release and run
+  `sudo ./install.sh`; data and configuration are kept and the previous version is kept as
+  `/opt/servermin.previous`.
 - Modules: Module Manager → module → Update, or `serverctl module update <id> <package.tgz>`. If the new
   version fails to start, the previous version is restored automatically. Modules are versioned
   independently of the core.

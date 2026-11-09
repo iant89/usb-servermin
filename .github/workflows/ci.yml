@@ -25,3 +25,4 @@ jobs:
           path: |
             release/*.tar.gz*
             release/modules/*.tgz*
+            release/release.json*

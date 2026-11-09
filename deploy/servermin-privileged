@@ -13,6 +13,8 @@ export LC_ALL=C.UTF-8
 DATA_DIR=/var/lib/servermin
 STATE_DIR=/var/lib/servermin-helper
 NETPLAN_FILE=/etc/netplan/90-servermin.yaml
+APP_DIR=/opt/servermin
+UPDATES_DIR=/var/tmp/servermin/updates
 [[ -r /etc/servermin/privileged.conf ]] && source /etc/servermin/privileged.conf
 
 die() { echo "servermin-privileged: $*" >&2; exit 2; }
@@ -164,6 +166,35 @@ case "$op" in
     rm -f "$STATE_DIR/netplan-backup.yaml" "$STATE_DIR/netplan-backup.none"
     netplan apply
     echo "rolled back"
+    ;;
+  platform.update)
+    only manifest signature archive
+    for k in manifest signature archive; do
+      require "$k" "^${UPDATES_DIR}/[A-Za-z0-9._-]{1,120}\$"
+      no_dotdot "${A[$k]}"
+    done
+    for k in manifest signature archive; do
+      [[ -f "${A[$k]}" && ! -L "${A[$k]}" ]] || die "$k is not a regular file"
+    done
+    [[ -x "$APP_DIR/bin/servermin-update" ]] || die "this installation has no updater; install the release manually"
+    if systemctl is-active --quiet servermin-update.service; then die "an update is already running"; fi
+    # Copy into a root-only directory, so the files cannot change after they are verified.
+    incoming="$STATE_DIR/update/incoming"
+    rm -rf "$incoming"
+    install -d -m 700 -o root -g root "$incoming"
+    for k in manifest signature archive; do install -m 600 -o root -g root -- "${A[$k]}" "$incoming/$(basename -- "${A[$k]}")"; done
+    # Its own unit, outside server-control.service, so stopping the server does not stop the update.
+    systemd-run --quiet --collect --unit=servermin-update --description="Server Control update" \
+      "$APP_DIR/bin/servermin-update" apply "$incoming/$(basename -- "${A[manifest]}")" "$incoming/$(basename -- "${A[signature]}")" "$incoming/$(basename -- "${A[archive]}")"
+    echo "update started"
+    ;;
+  platform.rollback)
+    only
+    [[ -x "$APP_DIR/bin/servermin-update" ]] || die "this installation has no updater"
+    [[ -d "$APP_DIR.previous" ]] || die "there is no previous version to roll back to"
+    if systemctl is-active --quiet servermin-update.service; then die "an update is already running"; fi
+    systemd-run --quiet --collect --unit=servermin-update --description="Server Control rollback" "$APP_DIR/bin/servermin-update" rollback
+    echo "rollback started"
     ;;
   *)
     die "unknown operation: $op"

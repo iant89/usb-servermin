@@ -50,6 +50,20 @@ Server Control is a privileged administration interface. These are the mechanism
   intentional exception: it needs the `terminal.access` permission, runs the shell as the unprivileged
   service account, and every session is audited.
 
+## Updates
+
+Updates are the one path by which new root-executed code reaches a server, so they are checked twice:
+
+- The core installs nothing whose `release.json` does not verify with the Ed25519 public key shipped in
+  the installed release (`/opt/servermin/release-signing.pub`, root-owned). Archives must match the
+  SHA-256 and size in that signed manifest. The private key exists only as a GitHub Actions secret.
+- `platform.update` accepts only file names under `/var/tmp/servermin/updates`; the helper copies them
+  into a root-only directory before anything reads them, so the service account cannot swap them after
+  verification. The root updater then repeats the signature, version (no downgrades) and checksum checks
+  with its own code and key, and refuses archives that contain links or special files.
+- Which repository releases come from is set only in `/etc/servermin/config.json`, not through the API.
+- The `platform.update` permission (admins by default) is required to check, install or roll back.
+
 ## Things to know
 
 - **Docker group**: the installer adds `servermin` to the `docker` group when it exists. Docker access is

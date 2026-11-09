@@ -23,7 +23,9 @@
     "test:integration": "vitest run --project integration",
     "check": "npm run typecheck && npm run test",
     "package": "node tools/package.mjs",
-    "update-enterprise-ui": "bash tools/update-enterprise-ui.sh"
+    "update-enterprise-ui": "bash tools/update-enterprise-ui.sh",
+    "release:keygen": "node tools/release-keygen.mjs",
+    "set-version": "node tools/set-version.mjs"
   },
   "dependencies": {
     "@enterprise-ui/react": "file:vendor/enterprise-ui-react-0.1.0.tgz",

@@ -228,6 +228,14 @@ export function registerCoreRoutes(router: Router, p: Platform) {
     return next;
   });
 
+  // ── Updates from signed releases ───────────────────────────────────────────────
+  router.get('/api/v1/updates', 'platform.update', () => p.updates.state());
+  router.post('/api/v1/updates/check', 'platform.update', (ctx) => p.updates.check(actor(ctx)));
+  router.post('/api/v1/updates/apply', 'platform.update', (ctx) => p.updates.apply(actor(ctx)));
+  router.post('/api/v1/updates/rollback', 'platform.update', (ctx) => p.updates.rollback(actor(ctx)));
+  router.post('/api/v1/updates/modules/:id', 'platform.update', (ctx) => p.updates.updateModule(ctx.params.id, actor(ctx)));
+  router.put('/api/v1/updates/settings', 'platform.update', (ctx) => p.updates.updateSettings((ctx.body ?? {}) as Record<string, never>, actor(ctx)));
+
   // ── Observability ──────────────────────────────────────────────────────────────
   router.get('/api/v1/system', AUTHENTICATED, async () => ({ ...(await hostSummary(config.paths.data)), health: p.health(), coreVersion: CORE_VERSION }));
   router.get('/api/v1/platform/health', 'modules.read', () => ({ ...p.health(), processes: p.processes.list() }));

@@ -1,0 +1,5 @@
+#!/bin/sh
+# servermin-update: installs a signed release or rolls back (root). Started by the privilege helper.
+set -e
+. "$(dirname "$(readlink -f "$0")")/node-launcher.sh"
+exec "$NODE" "$APP/bin/servermin-update.mjs" "$@"

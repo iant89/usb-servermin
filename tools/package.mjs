@@ -16,6 +16,7 @@
  *   npm run package -- --bundle-node                  bundle the pinned Node.js for this machine's architecture
  *   npm run package -- --bundle-node --arch x64,arm64 one release per architecture
  *   npm run package -- --node /path/to/node-dir       bundle a runtime you already have (bin/node)
+ *   npm run package -- --bundle-node --sign           also sign release/release.json with RELEASE_SIGNING_KEY (CI)
  */
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,6 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { pack } from './build-module.mjs';
 import { hostArch, nodeRuntime, runtimeInfo } from './node-runtime.mjs';
+import { describeFile, keyFingerprint, writeManifest } from './release-manifest.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -36,6 +38,7 @@ const arches = bundle ? (opt('--arch') ?? hostArch()).split(',').map((a) => a.tr
 
 execFileSync(process.execPath, [join(root, 'tools/build.mjs')], { stdio: 'inherit' });
 rmSync(join(root, 'release', 'modules'), { recursive: true, force: true });
+rmSync(join(root, 'release', 'release.json.sig'), { force: true });
 
 function release(arch, runtimeDir) {
   const name = `servermin-${version}${arch ? `-linux-${arch}` : ''}`;
@@ -51,10 +54,13 @@ function release(arch, runtimeDir) {
   copy('packages/cli/dist/serverctl.js', 'cli/serverctl.js');
   copy('packages/cli/dist/verify.js', 'cli/verify.js');
   mkdirSync(join(out, 'bin'));
-  for (const f of ['server-control', 'serverctl', 'servermin-verify', 'node-launcher.sh']) copy(`deploy/${f}`, `bin/${f}`);
+  for (const f of ['server-control', 'serverctl', 'servermin-verify', 'servermin-update', 'node-launcher.sh']) copy(`deploy/${f}`, `bin/${f}`);
+  copy('deploy/servermin-update.mjs', 'bin/servermin-update.mjs');
   mkdirSync(join(out, 'deploy'));
   for (const f of ['server-control.service', 'sudoers', 'servermin-privileged', 'config.json']) copy(`deploy/${f}`, `deploy/${f}`);
   copy('deploy/install.sh', 'install.sh');
+  // The key servers use to verify updates. A release without it cannot update itself.
+  if (existsSync(join(root, 'deploy/release-signing.pub'))) copy('deploy/release-signing.pub', 'release-signing.pub');
   copy('README.md', 'README.md');
   copy('docs/hardware-checklist.md', 'HARDWARE-CHECKLIST.md');
   writeFileSync(join(out, 'VERSION'), version + '\n');
@@ -78,10 +84,11 @@ function release(arch, runtimeDir) {
   execFileSync('tar', ['-czf', archive, '--owner=0', '--group=0', '-C', join(root, 'release'), name]);
   const sha = createHash('sha256').update(readFileSync(archive)).digest('hex');
   writeFileSync(`${archive}.sha256`, `${sha}  ${name}.tar.gz\n`);
-  return { archive, out };
+  return { archive, out, arch };
 }
 
 const built = [];
+const archives = [];
 for (const arch of arches) {
   let runtime = localNode;
   if (bundle) {
@@ -89,6 +96,7 @@ for (const arch of arches) {
     runtime = await nodeRuntime(nodeVersion, arch, join(root, '.cache', 'node'));
   }
   const r = release(arch, runtime);
+  archives.push(r);
   // A runtime for this machine's architecture can be smoke-tested right away.
   if (runtime && (!arch || arch === hostArch())) {
     const v = execFileSync(join(r.out, 'node/bin/node'), ['-e', "require('node:sqlite'); process.stdout.write(process.version)"]).toString();
@@ -96,5 +104,27 @@ for (const arch of arches) {
   }
   built.push(`${r.archive.replace(root + '/', '')}${runtime ? ` (Node.js ${existsSync(join(runtime, 'VERSION')) ? runtimeInfo(runtime).split(' ')[0] : 'local'})` : ''}`);
 }
-for (const id of readdirSync(join(root, 'modules'))) if (existsSync(join(root, 'modules', id, 'module.json'))) pack(join(root, 'modules', id), join(root, 'release', 'modules'));
-console.log(`\n${built.map((b) => `✓ ${b}`).join('\n')}\n✓ release/modules/*.tgz`);
+const modules = {};
+for (const id of readdirSync(join(root, 'modules'))) {
+  if (!existsSync(join(root, 'modules', id, 'module.json'))) continue;
+  const { file } = pack(join(root, 'modules', id), join(root, 'release', 'modules'));
+  const m = JSON.parse(readFileSync(join(root, 'modules', id, 'module.json'), 'utf8'));
+  modules[id] = { version: m.version, coreVersion: m.coreVersion ?? '*', ...describeFile(file) };
+}
+
+// Signed manifest: what a server checks before installing anything from this release.
+const pubFile = join(root, 'deploy/release-signing.pub');
+const publicKeyPem = existsSync(pubFile) ? readFileSync(pubFile, 'utf8') : undefined;
+const manifest = {
+  format: 1,
+  version,
+  createdAt: new Date().toISOString(),
+  signingKey: publicKeyPem ? keyFingerprint(publicKeyPem) : null,
+  core: Object.fromEntries(archives.filter((a) => a.arch).map((a) => [`linux-${a.arch}`, { ...describeFile(a.archive), nodeBundled: true }])),
+  modules,
+};
+const sign = args.includes('--sign');
+if (sign && !process.env.RELEASE_SIGNING_KEY) throw new Error('--sign needs the RELEASE_SIGNING_KEY environment variable (the private key from npm run release:keygen)');
+if (sign && !publicKeyPem) throw new Error('--sign needs deploy/release-signing.pub (run npm run release:keygen and commit the public key)');
+writeManifest(join(root, 'release', 'release.json'), manifest, sign ? { privateKeyPem: process.env.RELEASE_SIGNING_KEY, publicKeyPem } : {});
+console.log(`\n${built.map((b) => `✓ ${b}`).join('\n')}\n✓ release/modules/*.tgz\n✓ release/release.json${sign ? ' (signed)' : ' (unsigned)'}`);

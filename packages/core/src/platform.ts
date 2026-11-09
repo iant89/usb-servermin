@@ -16,6 +16,7 @@ import { ModuleManager } from './modules/module-manager';
 import { NotificationService } from './notifications/notifications';
 import { ProcessService } from './process/process-service';
 import { StorageClient } from './storage/storage-client';
+import { UpdateService } from './updates/update-service';
 import { ChannelHub } from './websocket/channel-hub';
 import { WebSocketGateway } from './websocket/gateway';
 import { CORE_VERSION } from './version';
@@ -44,6 +45,7 @@ export class Platform {
   notifications!: NotificationService;
   processes!: ProcessService;
   modules!: ModuleManager;
+  updates!: UpdateService;
   http!: HttpServer;
   gateway!: WebSocketGateway;
   address: { port: number; host: string } | null = null;
@@ -99,6 +101,7 @@ export class Platform {
       hostname: os.hostname(),
       workerScript: this.options.workerScript ?? join(dirname(fileURLToPath(import.meta.url)), 'module-host.js'),
     });
+    this.updates = new UpdateService(this);
     this.ensureSetupToken();
 
     // The API is available before modules finish loading so a broken module never locks users out.
@@ -110,6 +113,8 @@ export class Platform {
     await this.modules.init();
     const states = this.modules.list().map((m) => `${m.id}=${m.state}`);
     this.log.info(`Modules: ${states.join(', ') || 'none installed'}`);
+
+    this.updates.start();
 
     this.pruneTimer = setInterval(() => void this.logs.prune(this.config.logging.retentionDays), 3_600_000);
     this.pruneTimer.unref();
@@ -190,6 +195,7 @@ export class Platform {
   async stop() {
     this.log.info('Shutting down');
     if (this.pruneTimer) clearInterval(this.pruneTimer);
+    this.updates?.stop();
     this.gateway?.close();
     await this.http?.close();
     await this.modules?.shutdown();

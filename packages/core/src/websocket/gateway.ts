@@ -54,6 +54,13 @@ export class WebSocketGateway {
         return this.p.storage.activity.subscribe((s) => client.send({ type: 'data', id: subId, data: s }));
       },
     });
+    this.coreChannels.set('platform.updates', {
+      permission: 'platform.update',
+      subscribe: (client, subId) => {
+        client.send({ type: 'data', id: subId, data: this.p.updates.state() });
+        return this.p.updates.subscribe((s) => client.send({ type: 'data', id: subId, data: s }));
+      },
+    });
     this.coreChannels.set('module.status', {
       permission: 'authenticated',
       subscribe: (client, subId) =>

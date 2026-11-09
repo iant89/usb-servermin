@@ -26,7 +26,7 @@ done
 if [[ $UNINSTALL -eq 1 ]]; then
   systemctl disable --now server-control.service 2>/dev/null || true
   rm -f /etc/systemd/system/server-control.service /etc/sudoers.d/servermin /usr/local/bin/serverctl /usr/local/bin/servermin-verify
-  rm -rf "$APP" /usr/lib/servermin
+  rm -rf "$APP" "$APP.previous" /usr/lib/servermin
   systemctl daemon-reload
   echo "Removed. Data in /var/lib/servermin and configuration in /etc/servermin were kept."
   exit 0
@@ -79,10 +79,22 @@ mkdir -p "$APP.new"
 cp -a "$SRC/server" "$SRC/shell" "$SRC/modules" "$SRC/cli" "$SRC/bin" "$APP.new/"
 [[ -d "$SRC/node" ]] && cp -a "$SRC/node" "$APP.new/"
 cp -a "$SRC/README.md" "$SRC/VERSION" "$APP.new/" 2>/dev/null || true
-rm -rf "$APP.old"
-[[ -d "$APP" ]] && mv "$APP" "$APP.old"
+# Kept in the installation so the updater can reinstall or roll back without the original download.
+cp -a "$SRC/deploy" "$APP.new/"
+install -m 755 "$SRC/install.sh" "$APP.new/install.sh"
+[[ -f "$SRC/release-signing.pub" ]] && install -m 644 "$SRC/release-signing.pub" "$APP.new/release-signing.pub"
+if [[ ! -f "$APP.new/release-signing.pub" && -f "$APP/release-signing.pub" ]]; then
+  # Never lose the update trust anchor because a locally built release lacks it.
+  install -m 644 "$APP/release-signing.pub" "$APP.new/release-signing.pub"
+fi
+# The previous version stays as $APP.previous for rollback.
+if [[ -d "$APP" && "$(cat "$APP/VERSION" 2>/dev/null)" != "$(cat "$SRC/VERSION" 2>/dev/null)" ]]; then
+  rm -rf "$APP.previous"
+  mv "$APP" "$APP.previous"
+else
+  rm -rf "$APP"
+fi
 mv "$APP.new" "$APP"
-rm -rf "$APP.old"
 chown -R root:root "$APP"
 chmod -R go-w "$APP"
 
@@ -102,6 +114,7 @@ for d in /var/lib/servermin /var/log/servermin /var/tmp/servermin /var/lib/serve
 
 ln -sf "$APP/bin/serverctl" /usr/local/bin/serverctl
 ln -sf "$APP/bin/servermin-verify" /usr/local/bin/servermin-verify
+install -d -m 750 -o servermin -g servermin /var/tmp/servermin/updates
 install -m 644 "$SRC/deploy/server-control.service" /etc/systemd/system/server-control.service
 systemctl daemon-reload
 systemctl enable --now server-control.service
