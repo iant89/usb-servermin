@@ -13,10 +13,18 @@ export type Params = SqlValue[] | Record<string, SqlValue>;
 export class Database {
   readonly db: DatabaseSync;
 
-  constructor(readonly file: string) {
+  /**
+   * @param autoCheckpoint false leaves WAL checkpoints (the step that forces data to disk with fsync)
+   *   to another connection, e.g. the storage thread, so this connection's writes never wait on the disk.
+   */
+  constructor(
+    readonly file: string,
+    opts: { autoCheckpoint?: boolean } = {},
+  ) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;');
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 10000; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;');
+    if (opts.autoCheckpoint === false) this.db.exec('PRAGMA wal_autocheckpoint = 0;');
   }
 
   private bind(params?: Params): SqlValue[] {
@@ -67,6 +75,11 @@ export class Database {
         this.run('INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)', [m.version, m.name, new Date().toISOString()]);
       });
     }
+  }
+
+  /** PASSIVE checkpoint: copies committed WAL pages into the database without blocking writers. */
+  checkpoint() {
+    return this.get<{ busy: number; log: number; checkpointed: number }>('PRAGMA wal_checkpoint(PASSIVE)');
   }
 
   close() {

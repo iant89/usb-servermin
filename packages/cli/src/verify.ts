@@ -21,7 +21,7 @@
  * for the password; piped stdin works too). Exit code 0 when nothing failed.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fdatasyncSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -327,6 +327,45 @@ async function hostChecks() {
     const free = sh('df', ['-Pk', dirs[0]]).out.split('\n')[1]?.split(/\s+/)[3];
     if (free && Number(free) < 500_000) warn(`only ${Math.round(Number(free) / 1024)} MB free on the data volume`);
     return `${dirs.join(', ')} owned by servermin${free ? `, ${Math.round(Number(free) / 1024 / 1024)} GB free` : ''}`;
+  });
+
+  await check('Disk speed (data directory)', () => {
+    const dir = config?.paths?.data ?? '/var/lib/servermin';
+    if (!existsSync(dir)) skip(`${dir} does not exist`);
+    const file = join(dir, `.servermin-verify-${process.pid}`);
+    let fd: number;
+    try {
+      fd = openSync(file, 'w');
+    } catch {
+      return skip(`cannot write in ${dir}; run with sudo`);
+    }
+    // Databases make many small writes that must reach the disk; time exactly that.
+    const block = Buffer.alloc(4096, 1);
+    const times: number[] = [];
+    try {
+      const deadline = Date.now() + 15_000;
+      for (let i = 0; i < 40 && Date.now() < deadline; i++) {
+        const t = process.hrtime.bigint();
+        writeSync(fd, block, 0, block.length, (i % 8) * 4096);
+        fdatasyncSync(fd);
+        times.push(Number(process.hrtime.bigint() - t) / 1e6);
+      }
+    } finally {
+      closeSync(fd);
+      rmSync(file, { force: true });
+    }
+    times.sort((x, y) => x - y);
+    const median = times[Math.floor(times.length / 2)];
+    const perSecond = Math.round(1000 / Math.max(median, 0.01));
+    const source = sh('findmnt', ['-no', 'SOURCE', '-T', dir]).out.replace(/\[.*\]$/, '');
+    const disk = source ? sh('lsblk', ['-ndo', 'PKNAME', source]).out || source.replace('/dev/', '') : '';
+    const info = disk ? sh('lsblk', ['-dno', 'TRAN,MODEL', `/dev/${disk.replace('/dev/', '')}`]).out.replace(/\s+/g, ' ') : '';
+    report.diskSpeed = { device: source, disk, info, medianMs: Math.round(median * 10) / 10, syncedWritesPerSecond: perSecond, samples: times.length };
+    const where = `${source || dir}${info ? ` (${info})` : ''}`;
+    const summary = `${perSecond} synced writes/s, median ${median.toFixed(1)} ms on ${where}`;
+    if (median > 50) warn(`${summary} — very slow: expect slow saves and delayed module start-up. A USB 3 SSD is around a hundred times faster; the data directory can also live on another disk (paths.data in ${CONFIG_FILE})`);
+    if (median > 10) warn(`${summary} — slow; the server works, but saving data and starting modules will lag`);
+    return summary;
   });
 
   await check('Privilege helper and sudoers rule', () => {

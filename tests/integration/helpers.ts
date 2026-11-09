@@ -17,7 +17,7 @@ export interface TestServer {
 }
 
 /** Starts a real platform (HTTP, workers, SQLite) in a temporary directory and signs in as admin. */
-export async function startServer(overrides: Partial<CoreConfig['modules']> = {}, opts: { login?: boolean } = {}): Promise<TestServer> {
+export async function startServer(overrides: Partial<CoreConfig['modules']> = {}, opts: { login?: boolean; storageWriteDelayMs?: number } = {}): Promise<TestServer> {
   const dir = mkdtempSync(join(tmpdir(), 'servermin-it-'));
   const base = defaultConfig(dir);
   const config = mergeConfig(base, {
@@ -27,7 +27,7 @@ export async function startServer(overrides: Partial<CoreConfig['modules']> = {}
     privileged: { mode: 'simulate' },
     logging: { level: 'DEBUG', stdout: false },
   } as any);
-  const platform = new Platform(config, { workerScript: join(ROOT, '.vitest-tmp/core/module-host.js') });
+  const platform = new Platform(config, { workerScript: join(ROOT, '.vitest-tmp/core/module-host.js'), storageScript: join(ROOT, '.vitest-tmp/core/storage-host.js'), storageWriteDelayMs: opts.storageWriteDelayMs });
   const quiet = process.stdout.write;
   process.stdout.write = (() => true) as any;
   try {

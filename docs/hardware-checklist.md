@@ -42,6 +42,8 @@ sudo servermin-verify --user admin --json /root/verify-A.json
 - [ ] *Privilege helper and sudoers rule* passes: the service account reaches the helper without a password and has no other root access.
 - [ ] *Terminal* reports the shell runs as `servermin`, not root.
 - [ ] *Storage* names the USB stick as the system disk.
+- [ ] *Disk speed* passes. A warning means the stick is slow at small synced writes; see
+      [slow storage](operations.md#slow-storage-usb-flash-drives).
 
 Then the opt-in checks. Each one changes the system briefly and cleans up:
 

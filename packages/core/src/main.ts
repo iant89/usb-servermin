@@ -30,8 +30,7 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 // A failure inside the core itself: log it and let systemd restart us (Restart=on-failure).
 // Module failures never reach here, because modules run in worker threads.
 process.on('uncaughtException', (e) => {
-  platform.logs.write({ level: 'ERROR', source: 'core', message: `Uncaught exception: ${e.message}`, metadata: { stack: e.stack } });
-  platform.logs.close();
+  platform.logs.writeDirect({ level: 'ERROR', source: 'core', message: `Uncaught exception: ${e.message}`, metadata: { stack: e.stack } });
   process.exit(70);
 });
 process.on('unhandledRejection', (e) => {

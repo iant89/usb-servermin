@@ -25,11 +25,26 @@ This document maps the design specification to the implementation.
 | Event bus | `core/src/events/event-bus.ts` |
 | Auth: users, sessions, API tokens, lockout | `core/src/auth/*` |
 | Process execution and privilege boundary | `core/src/process/process-service.ts` |
-| Logging (stdout/journald, file, SQLite, live) | `core/src/logging/logger.ts` |
+| Logging (live subscribers; batches persisted by the storage thread) | `core/src/logging/logger.ts` |
+| Storage thread: module databases, log persistence, checkpoints | `core/src/storage/*` |
 | Audit log | `core/src/audit/audit.ts` |
 | HTTP server, CSRF, rate limit, static files | `core/src/http/server.ts` |
 | Core REST endpoints | `core/src/http/api.ts` |
 | WebSocket gateway and channel hub | `core/src/websocket/*` |
+
+## Storage thread
+
+All slow disk work runs on a dedicated storage thread (`core/src/storage/storage-host.ts`):
+
+- every module's SQLite database (modules reach it asynchronously through the core);
+- persisting log entries to `core.db`, and writing log lines to journald (stdout) and the optional log file;
+- WAL checkpoints of all databases, the step that forces data onto the disk with `fsync`.
+
+The main thread keeps its own `core.db` connection for small, infrequent writes (sessions, users,
+audit, notifications), in WAL mode with `synchronous=NORMAL` and automatic checkpoints disabled, so
+none of its writes wait for the disk. On slow media such as a USB 2.0 flash drive, saving data and
+starting modules can lag, but the HTTP API, the WebSocket gateway and module calls stay responsive.
+A slow-storage integration test delays every storage-thread write to prove this.
 
 ## Module isolation
 

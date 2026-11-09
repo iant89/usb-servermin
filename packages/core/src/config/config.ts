@@ -48,6 +48,8 @@ export interface CoreConfig {
     retentionDays: number;
     /** Write JSON lines to stdout (journald). */
     stdout: boolean;
+    /** Also keep a rotated JSON log file in paths.logs. Off by default: journald and SQLite already keep the logs, and every extra write hurts on USB flash. */
+    file: boolean;
   };
   auth: {
     sessionHours: number;
@@ -77,11 +79,12 @@ export function defaultConfig(base = '/'): CoreConfig {
       sources: [p('opt/servermin/modules')],
       watch: false,
       maxMemoryMb: 512,
-      lifecycleTimeoutMs: 15_000,
+      // Generous for slow media; a hung module still cannot stall the core, it only delays its own start.
+      lifecycleTimeoutMs: 60_000,
       healthIntervalMs: 30_000,
     },
     privileged: { mode: 'sudo', helper: p('usr/lib/servermin/servermin-privileged') },
-    logging: { level: 'INFO', retentionDays: 14, stdout: true },
+    logging: { level: 'INFO', retentionDays: 14, stdout: true, file: false },
     auth: { sessionHours: 12, secureCookies: 'auto', loginAttempts: 5, lockoutMinutes: 15 },
     dev: false,
   };

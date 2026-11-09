@@ -12,7 +12,7 @@ import {
   type SystemApi,
 } from '@servermin/sdk';
 import type { AuditLog } from '../audit/audit';
-import type { Database } from '../database/database';
+import type { ModuleDbClient } from '../storage/storage-client';
 import type { EventBus } from '../events/event-bus';
 import type { LogService } from '../logging/logger';
 import type { NotificationService } from '../notifications/notifications';
@@ -38,7 +38,7 @@ export interface InstanceHost {
   hub: ChannelHub;
   system: SystemApi;
   workerScript: string;
-  moduleDb(id: string): Database;
+  moduleDb(id: string): ModuleDbClient;
   callService(callerId: string, name: string, method: string, args: unknown[]): Promise<unknown>;
   serviceAvailable(callerId: string, name: string): boolean;
   onServicesChanged(): void;
@@ -204,7 +204,7 @@ export class ModuleInstance {
       'db.run': ({ sql, params }: any) => db().run(sql, params),
       'db.get': ({ sql, params }: any) => db().get(sql, params),
       'db.all': ({ sql, params }: any) => db().all(sql, params),
-      'db.transaction': (statements: { sql: string; params?: any }[]) => db().transaction(() => statements.forEach((s) => db().run(s.sql, s.params))),
+      'db.transaction': (statements: { sql: string; params?: any }[]) => db().transaction(statements),
       'process.execute': async ({ callId, ...options }: any) => {
         const ac = new AbortController();
         this.cancels.set(callId, ac);

@@ -45,7 +45,7 @@ function release(arch, runtimeDir) {
   const copy = (from, to) => cpSync(join(root, from), join(out, to), { recursive: true });
 
   mkdirSync(join(out, 'server'));
-  for (const f of ['server.js', 'server.js.map', 'module-host.js', 'module-host.js.map']) copy(`packages/core/dist/${f}`, `server/${f}`);
+  for (const f of ['server.js', 'server.js.map', 'module-host.js', 'module-host.js.map', 'storage-host.js', 'storage-host.js.map']) copy(`packages/core/dist/${f}`, `server/${f}`);
   copy('packages/shell/dist', 'shell');
   mkdirSync(join(out, 'cli'));
   copy('packages/cli/dist/serverctl.js', 'cli/serverctl.js');

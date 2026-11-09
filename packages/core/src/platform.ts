@@ -15,6 +15,7 @@ import { LogService } from './logging/logger';
 import { ModuleManager } from './modules/module-manager';
 import { NotificationService } from './notifications/notifications';
 import { ProcessService } from './process/process-service';
+import { StorageClient } from './storage/storage-client';
 import { ChannelHub } from './websocket/channel-hub';
 import { WebSocketGateway } from './websocket/gateway';
 import { CORE_VERSION } from './version';
@@ -22,6 +23,10 @@ import { CORE_VERSION } from './version';
 export interface PlatformOptions {
   /** Path of the bundled worker host. Defaults to `module-host.js` next to this file. */
   workerScript?: string;
+  /** Path of the bundled storage thread. Defaults to `storage-host.js` next to this file. */
+  storageScript?: string;
+  /** Test only: delay added to every write on the storage thread, to simulate slow media. */
+  storageWriteDelayMs?: number;
 }
 
 /**
@@ -33,6 +38,7 @@ export class Platform {
   readonly bus: EventBus;
   readonly hub = new ChannelHub();
   db!: Database;
+  storage!: StorageClient;
   auth!: AuthService;
   audit!: AuditLog;
   notifications!: NotificationService;
@@ -49,7 +55,7 @@ export class Platform {
     readonly config: CoreConfig,
     private readonly options: PlatformOptions = {},
   ) {
-    this.logs = new LogService({ level: config.logging.level, stdout: config.logging.stdout, dir: config.paths.logs });
+    this.logs = new LogService({ level: config.logging.level, stdout: config.logging.stdout });
     this.log = this.logs.logger('core');
     this.bus = new EventBus((error, event, owner) => this.logs.write({ level: 'ERROR', source: 'events', module: owner === 'core' ? undefined : owner, message: `Handler for ${event.type} failed: ${(error as Error).message}` }));
   }
@@ -57,9 +63,22 @@ export class Platform {
   async start() {
     const { paths } = this.config;
     for (const dir of [paths.data, paths.modules, paths.tmp]) mkdirSync(dir, { recursive: true });
-    this.db = new Database(join(paths.data, 'core.db'));
+    // The main thread's connection never checkpoints: the storage thread does, so a slow disk
+    // (USB flash) cannot stall request handling.
+    this.db = new Database(join(paths.data, 'core.db'), { autoCheckpoint: false });
     this.db.migrate(CORE_MIGRATIONS);
-    this.logs.attach(this.db);
+    this.storage = new StorageClient(
+      this.options.storageScript ?? join(dirname(fileURLToPath(import.meta.url)), 'storage-host.js'),
+      {
+        coreDb: join(paths.data, 'core.db'),
+        stdout: this.config.logging.stdout,
+        logFile: this.config.logging.file ? join(paths.logs, 'servermin.log') : undefined,
+        writeDelayMs: this.options.storageWriteDelayMs,
+      },
+      (message) => this.logs.writeDirect({ level: 'ERROR', source: 'storage', message }),
+    );
+    await this.storage.start();
+    this.logs.attach(this.storage);
     this.applySettings();
     this.log.info(`Server Control core ${CORE_VERSION} starting`, { node: process.version, privileged: this.config.privileged.mode, dev: this.config.dev });
 
@@ -76,6 +95,7 @@ export class Platform {
       notifications: this.notifications,
       audit: this.audit,
       hub: this.hub,
+      storage: this.storage,
       hostname: os.hostname(),
       workerScript: this.options.workerScript ?? join(dirname(fileURLToPath(import.meta.url)), 'module-host.js'),
     });
@@ -91,9 +111,9 @@ export class Platform {
     const states = this.modules.list().map((m) => `${m.id}=${m.state}`);
     this.log.info(`Modules: ${states.join(', ') || 'none installed'}`);
 
-    this.pruneTimer = setInterval(() => this.logs.prune(this.config.logging.retentionDays), 3_600_000);
+    this.pruneTimer = setInterval(() => void this.logs.prune(this.config.logging.retentionDays), 3_600_000);
     this.pruneTimer.unref();
-    this.logs.prune(this.config.logging.retentionDays);
+    void this.logs.prune(this.config.logging.retentionDays);
     return this;
   }
 
@@ -173,7 +193,8 @@ export class Platform {
     this.gateway?.close();
     await this.http?.close();
     await this.modules?.shutdown();
-    this.logs.close();
+    await this.logs.close();
+    await this.storage?.close();
     this.db?.close();
   }
 }

@@ -17,7 +17,7 @@ export async function buildCore(outdir = join(root, 'packages/core/dist')) {
   mkdirSync(outdir, { recursive: true });
   const banner = { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" };
   await esbuild.build({
-    entryPoints: { server: join(root, 'packages/core/src/main.ts'), 'module-host': join(root, 'packages/core/src/modules/worker-host.ts') },
+    entryPoints: { server: join(root, 'packages/core/src/main.ts'), 'module-host': join(root, 'packages/core/src/modules/worker-host.ts'), 'storage-host': join(root, 'packages/core/src/storage/storage-host.ts') },
     outdir,
     bundle: true,
     platform: 'node',
