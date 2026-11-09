@@ -275,9 +275,14 @@ async function hostChecks() {
     if (!onSystemd) skip('systemd is not running on this host');
     const enabled = sh('systemctl', ['is-enabled', 'server-control.service']).out;
     const active = sh('systemctl', ['is-active', 'server-control.service']).out;
-    const props = Object.fromEntries(sh('systemctl', ['show', 'server-control.service', '-p', 'NRestarts,User,ActiveEnterTimestamp']).out.split('\n').map((l) => l.split('=')));
-    assert(active === 'active', `server-control.service is ${active}`);
+    const props = Object.fromEntries(sh('systemctl', ['show', 'server-control.service', '-p', 'NRestarts,User,ActiveEnterTimestamp,MainPID']).out.split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    assert(active === 'active', `server-control.service is ${active}${diagnosePort()}`);
     if (props.User !== 'servermin') fail(`runs as "${props.User || 'root'}", expected servermin`);
+    // "active" can be a moment between crash-loop restarts: make sure this process holds the web port.
+    if (isRoot && has('ss')) {
+      const listeners = sh('ss', ['-H', '-ltnp', `sport = :${port}`]).out;
+      if (!new RegExp(`pid=${props.MainPID}\\b`).test(listeners)) fail(`active, but not listening on port ${port}${diagnosePort()}`);
+    }
     if (enabled !== 'enabled') warn(`active but "${enabled}" — it will not start at boot`);
     if (Number(props.NRestarts) > 0) warn(`active, but restarted ${props.NRestarts} times since boot; see journalctl -u server-control`);
     return `active and enabled, user servermin, up since ${props.ActiveEnterTimestamp}`;
