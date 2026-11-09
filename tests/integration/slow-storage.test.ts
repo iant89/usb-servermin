@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
 import { example, startServer, type TestServer } from './helpers';
 
 /**
@@ -52,5 +53,28 @@ describe('slow storage media', () => {
     s.platform.logs.write({ level: 'WARN', source: 'test', message: 'written on slow media' });
     const logs = await s.api('GET', '/api/v1/logs?search=written%20on%20slow%20media');
     expect(logs.body.map((l: any) => l.message)).toContain('written on slow media');
+  });
+
+  it('pushes "saving" to the browser while module writes lag, and "saved" afterwards', async () => {
+    const ws = new WebSocket(`${s.url.replace('http', 'ws')}/api/v1/ws`, { headers: { cookie: s.cookie, origin: s.url } });
+    const updates: any[] = [];
+    ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      if (m.type === 'data') updates.push(m.data);
+    });
+    await new Promise((r) => ws.once('open', r));
+    ws.send(JSON.stringify({ type: 'subscribe', id: 'st', channel: 'platform.storage' }));
+    // Wait for the current state, then for any earlier writes to finish showing.
+    const settle = Date.now();
+    while (Date.now() - settle < 10_000 && (!updates.length || updates.at(-1).busy)) await new Promise((r) => setTimeout(r, 100));
+    expect(updates.at(-1).busy).toBe(false);
+    const from = updates.length;
+    await s.api('POST', '/api/v1/modules/hello/greeting', { name: 'Indicator' });
+    const end = Date.now();
+    while (Date.now() - end < 10_000 && updates.at(-1).busy) await new Promise((r) => setTimeout(r, 100));
+    ws.close();
+    const during = updates.slice(from);
+    expect(during.some((u) => u.busy && u.sources.includes('hello'))).toBe(true);
+    expect(during.at(-1)).toMatchObject({ busy: false });
   });
 });

@@ -9,6 +9,94 @@ type Params = SqlValue[] | Record<string, SqlValue>;
 const WRITE_TIMEOUT = 300_000;
 const READ_TIMEOUT = 60_000;
 
+export interface StorageStatus {
+  /** True while a write has been waiting on the disk longer than the threshold (with a minimum display time). */
+  busy: boolean;
+  /** Writes queued or in progress on the storage thread. */
+  pending: number;
+  /** Age of the oldest pending write. */
+  oldestMs: number;
+  /** What is being written: module ids, `logs`, `checkpoint`. */
+  sources: string[];
+}
+
+/**
+ * Tracks writes handed to the storage thread so the UI can show "saving" while the disk lags.
+ * Short writes never flip `busy`, so fast disks never show it; once shown it stays a moment, to avoid flicker.
+ */
+export class StorageActivity {
+  private pending = new Map<number, { source: string; started: number }>();
+  private seq = 0;
+  private busy = false;
+  private shownAt = 0;
+  private timer: NodeJS.Timeout | null = null;
+  private listeners = new Set<(s: StorageStatus) => void>();
+
+  constructor(
+    private readonly thresholdMs = 500,
+    private readonly minVisibleMs = 1000,
+  ) {}
+
+  track<T>(source: string, work: Promise<T>): Promise<T> {
+    const id = ++this.seq;
+    this.pending.set(id, { source, started: Date.now() });
+    this.schedule(this.thresholdMs + 5);
+    return work.finally(() => {
+      this.pending.delete(id);
+      this.evaluate();
+    });
+  }
+
+  private schedule(ms: number) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.evaluate(), ms);
+    this.timer.unref();
+  }
+
+  private evaluate() {
+    const now = Date.now();
+    const oldest = Math.min(...[...this.pending.values()].map((p) => p.started), now);
+    const lagging = this.pending.size > 0 && now - oldest >= this.thresholdMs;
+    if (lagging) {
+      if (!this.busy) {
+        this.busy = true;
+        this.shownAt = now;
+      }
+      this.emit();
+      this.schedule(1000); // refresh counts and age while busy
+    } else if (this.busy) {
+      const visible = now - this.shownAt;
+      if (visible < this.minVisibleMs) return this.schedule(this.minVisibleMs - visible);
+      this.busy = false;
+      this.emit();
+      if (this.pending.size) this.schedule(this.thresholdMs - (now - oldest) + 5);
+    } else if (this.pending.size) {
+      this.schedule(this.thresholdMs - (now - oldest) + 5);
+    }
+  }
+
+  status(): StorageStatus {
+    const now = Date.now();
+    const items = [...this.pending.values()];
+    return {
+      busy: this.busy,
+      pending: items.length,
+      oldestMs: items.length ? now - Math.min(...items.map((p) => p.started)) : 0,
+      sources: [...new Set(items.map((p) => p.source))],
+    };
+  }
+
+  subscribe(listener: (s: StorageStatus) => void) {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
+  }
+
+  private emit() {
+    const s = this.status();
+    for (const l of this.listeners) l(s);
+  }
+}
+
 /**
  * Main-thread handle on the storage thread (see storage-host.ts). If the thread dies, it is
  * restarted and the failure is reported; callers waiting at that moment get an error.
@@ -18,6 +106,7 @@ export class StorageClient {
   private rpc!: RpcPeer;
   private ready!: Promise<void>;
   private closing = false;
+  readonly activity = new StorageActivity();
 
   constructor(
     private readonly script: string,
@@ -63,7 +152,7 @@ export class StorageClient {
   }
 
   writeLogs(rows: unknown[]) {
-    return this.call<void>('log.write', rows, WRITE_TIMEOUT);
+    return this.activity.track('logs', this.call<void>('log.write', rows, WRITE_TIMEOUT));
   }
 
   queryLogs<T>(q: unknown) {
@@ -71,21 +160,21 @@ export class StorageClient {
   }
 
   pruneLogs(retentionDays: number, maxRows = 200_000) {
-    return this.call<void>('log.prune', { retentionDays, maxRows }, WRITE_TIMEOUT);
+    return this.activity.track('logs', this.call<void>('log.prune', { retentionDays, maxRows }, WRITE_TIMEOUT));
   }
 
   checkpoint() {
-    return this.call<void>('checkpoint', undefined, WRITE_TIMEOUT);
+    return this.activity.track('checkpoint', this.call<void>('checkpoint', undefined, WRITE_TIMEOUT));
   }
 
   /** A module's own database, reached only through the storage thread. */
   moduleDb(id: string, file: string) {
     return {
-      migrate: (migrations: Migration[]) => this.call<void>('db.migrate', { id, file, migrations }, WRITE_TIMEOUT),
-      run: (sql: string, params?: Params) => this.call<{ changes: number; lastInsertRowid: number }>('db.run', { id, file, sql, params }, WRITE_TIMEOUT),
+      migrate: (migrations: Migration[]) => this.activity.track(id, this.call<void>('db.migrate', { id, file, migrations }, WRITE_TIMEOUT)),
+      run: (sql: string, params?: Params) => this.activity.track(id, this.call<{ changes: number; lastInsertRowid: number }>('db.run', { id, file, sql, params }, WRITE_TIMEOUT)),
       get: <T>(sql: string, params?: Params) => this.call<T | undefined>('db.get', { id, file, sql, params }, READ_TIMEOUT),
       all: <T>(sql: string, params?: Params) => this.call<T[]>('db.all', { id, file, sql, params }, READ_TIMEOUT),
-      transaction: (statements: { sql: string; params?: Params }[]) => this.call<void>('db.transaction', { id, file, statements }, WRITE_TIMEOUT),
+      transaction: (statements: { sql: string; params?: Params }[]) => this.activity.track(id, this.call<void>('db.transaction', { id, file, statements }, WRITE_TIMEOUT)),
     };
   }
 

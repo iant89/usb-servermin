@@ -46,6 +46,14 @@ export class WebSocketGateway {
   private registerCoreChannels() {
     const { bus, notifications, logs } = this.p;
     // Module lifecycle changes, so the shell can load, reload or remove module UI (§57).
+    // "Saving…" indicator: pushed when writes start or stop lagging behind on the storage thread.
+    this.coreChannels.set('platform.storage', {
+      permission: 'authenticated',
+      subscribe: (client, subId) => {
+        client.send({ type: 'data', id: subId, data: this.p.storage.activity.status() });
+        return this.p.storage.activity.subscribe((s) => client.send({ type: 'data', id: subId, data: s }));
+      },
+    });
     this.coreChannels.set('module.status', {
       permission: 'authenticated',
       subscribe: (client, subId) =>
