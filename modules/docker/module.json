@@ -1,7 +1,7 @@
 {
   "id": "docker",
   "name": "Docker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Containers, images, networks, volumes and Compose projects through the Docker Engine API.",
   "author": "Server Control",
   "apiVersion": 1,

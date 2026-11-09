@@ -158,10 +158,25 @@ docs/         architecture, module development, security, operations
 | **Storage** | Disks and partitions (marks the USB system disk), file systems, usage, mount/unmount with safe locations and confirmation, S.M.A.R.T. health |
 | **Network** | Interfaces, addresses, routes, gateway, DNS; static/DHCP configuration through netplan that rolls back automatically unless confirmed, with a warning before you cut your own connection |
 | **Services** | systemd services: status, start, stop, restart, enable, disable, journal logs; failure notifications |
-| **Applications** | Applications with versions, deployments, environment, ports and domains; deploy container images, Compose stacks, static sites, Node.js apps or existing system services |
+| **Applications** | Applications with versions, deployments, environment, ports and domains; deploy container images, Compose stacks, static sites, Node.js apps or existing system services; an **app catalogue** installs ready-made applications (Nextcloud, Vaultwarden, Jellyfin, Gitea, Home Assistant, Pi-hole, databases and more) from a short form |
 | **Logs** | Journal (system and services), container logs and platform/module logs: search, severity filter, live streaming, export |
 | **Terminal** | A browser terminal (xterm.js ↔ WebSocket ↔ PTY ↔ shell), audited, with idle timeout |
 | **Monitoring** | CPU, memory, disk, network, load and process history, live samples, threshold alerts, and metrics contributed by any module |
+
+### App catalogue
+
+Applications → *App catalogue* lists curated Docker Compose templates. Installing one asks only for
+what matters (ports, folders, passwords), checks that the ports are free, generates any password you
+leave empty, and creates an ordinary Compose application that is deployed in the background. Its
+settings stay editable afterwards (Edit → Environment, then Deploy): they are written next to the
+compose file as a `.env` file (mode 0600) that Docker Compose reads, and secrets are hidden in the UI.
+
+Templates live in `modules/applications/src/backend/catalog.ts`. A new template needs every
+`${VARIABLE}` in its compose file declared as a parameter, password parameters named so they are
+hidden (`…PASSWORD`, `…TOKEN`, `…KEY`, `…SECRET`), and `${APP_VERSION}` as the main image tag. The
+tests check all of that and, where Docker is installed, run `docker compose config` on every template.
+The catalogue ships with the Applications module, so new templates reach servers through a module
+update (Settings → Updates) without updating the core.
 
 ## Writing a module
 

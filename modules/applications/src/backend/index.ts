@@ -1,5 +1,9 @@
-import { HttpError, defineModule, type ModuleContext, type RequestUser } from '@servermin/sdk';
-import { composeWithVersion, containerSpec, validateApp, type Application } from './model';
+import { HttpError, defineModule, hasPermission, type ModuleContext, type RequestUser } from '@servermin/sdk';
+import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
+import { totalmem } from 'node:os';
+import { CATALOG, findTemplate, resolveParams, templatePorts } from './catalog';
+import { APP_ID_RE, composeWithVersion, containerSpec, validateApp, type Application } from './model';
 
 interface Row {
   id: string;
@@ -54,7 +58,8 @@ export default defineModule(() => {
     return toApp(r);
   }
 
-  async function status(app: Application) {
+  async function status(app: Application): Promise<{ state: string; detail: string; containers?: any[] }> {
+    if (running.has(app.id)) return { state: 'deploying', detail: 'Deploying…' };
     try {
       switch (app.type) {
         case 'service': {
@@ -95,7 +100,7 @@ export default defineModule(() => {
       switch (app.type) {
         case 'compose': {
           step(`docker compose up for project ${project(app)}`);
-          const r = await docker<{ output: string }>('composeUp', project(app), composeWithVersion(app, version));
+          const r = await docker<{ output: string }>('composeUp', project(app), composeWithVersion(app, version), app.environment);
           step(r.output || 'done');
           break;
         }
@@ -151,10 +156,87 @@ export default defineModule(() => {
       if (!(await systemd<boolean>(action, app.spec.unit))) throw new HttpError(502, `systemctl ${action} failed`);
       return;
     }
+    if (running.has(app.id)) throw new HttpError(409, 'The application is being deployed');
     const s = await status(app);
-    const containers = (s as any).containers ?? [];
+    const containers = s.containers ?? [];
     if (!containers.length) throw new HttpError(409, 'The application is not deployed yet');
     for (const c of containers) await docker(`${action}Container`, c.id);
+  }
+
+  // ── App catalogue ──────────────────────────────────────────────────────────────
+
+  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const timezone = () => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  };
+
+  /** Can a TCP port be bound on all addresses right now? Ports below 1024 cannot be tested without root. */
+  function portFree(port: number) {
+    if (port < 1024) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const srv = createServer();
+      srv.once('error', () => resolve(false));
+      srv.listen({ port, host: '0.0.0.0', exclusive: true }, () => srv.close(() => resolve(true)));
+    });
+  }
+
+  const hostPort = (p: string) => {
+    const m = /^(?:[\d.]+:)?(\d+):\d+(\/(tcp|udp))?$/.exec(p);
+    return m ? `${m[1]}/${m[3] ?? 'tcp'}` : null;
+  };
+
+  /** Host ports already published by other applications. */
+  async function usedPorts(exceptId?: string) {
+    const used = new Map<string, string>();
+    for (const a of (await ctx.database.all<Row>('SELECT * FROM applications')).map(toApp)) {
+      if (a.id === exceptId) continue;
+      for (const p of a.ports) {
+        const hp = hostPort(p);
+        if (hp) used.set(hp, a.name);
+      }
+    }
+    return used;
+  }
+
+  async function portProblems(ports: string[]) {
+    const problems: string[] = [];
+    const used = await usedPorts();
+    for (const p of ports) {
+      const hp = hostPort(p);
+      if (!hp) continue;
+      const owner = used.get(hp);
+      if (owner) problems.push(`Port ${hp} is already used by ${owner}`);
+      else if (hp.endsWith('/tcp') && !(await portFree(Number(hp.split('/')[0])))) problems.push(`Port ${hp.split('/')[0]} is already in use on this server`);
+    }
+    return problems;
+  }
+
+  async function installedFromCatalog() {
+    const out = new Map<string, string[]>();
+    for (const a of (await ctx.database.all<Row>('SELECT * FROM applications')).map(toApp)) if (a.spec.catalog) out.set(a.spec.catalog.id, [...(out.get(a.spec.catalog.id) ?? []), a.id]);
+    return out;
+  }
+
+  /** Values to prefill the install form: free ports, an unused id, the server time zone. */
+  async function suggestions(id: string) {
+    const t = findTemplate(id)!;
+    const used = await usedPorts();
+    const values: Record<string, string> = {};
+    for (const p of t.params) {
+      if (p.type === 'port') {
+        let port = Number(p.default);
+        for (let i = 0; i < 50; i++, port++) if (!used.has(`${port}/${p.protocol ?? 'tcp'}`) && (await portFree(port))) break;
+        values[p.key] = String(port);
+      } else if (p.generate === 'timezone') values[p.key] = timezone();
+      else if (p.default !== undefined) values[p.key] = p.default;
+    }
+    let appId = t.id;
+    for (let n = 2; await ctx.database.get('SELECT id FROM applications WHERE id = ?', [appId]); n++) appId = `${t.id}-${n}`;
+    return { appId, values };
   }
 
   function redact(app: Application) {
@@ -219,6 +301,54 @@ export default defineModule(() => {
         for (const c of (s as any).containers ?? []) out.push(...(await docker<string[]>('containerLogs', c.id, tail)).map((l) => (app.type === 'compose' ? `[${c.service ?? c.name}] ${l}` : l)));
         return out.sort().slice(-tail);
       }, R);
+
+      ctx.http.get('/catalog', async () => {
+        const installed = await installedFromCatalog();
+        return {
+          arch,
+          memoryMb: Math.round(totalmem() / 1024 / 1024),
+          docker: await ctx.services.available('docker.engine'),
+          templates: CATALOG.map(({ compose: _c, ...t }) => ({ ...t, installed: installed.get(t.id) ?? [], supported: t.arch.includes(arch) })),
+        };
+      }, R);
+      ctx.http.get('/catalog/:id', async (req) => {
+        const t = findTemplate(req.params.id);
+        if (!t) throw new HttpError(404, `The catalogue has no template ${req.params.id}`);
+        return { ...t, supported: t.arch.includes(arch), installed: (await installedFromCatalog()).get(t.id) ?? [], suggested: await suggestions(t.id) };
+      }, R);
+      ctx.http.post('/catalog/:id/install', async (req) => {
+        const t = findTemplate(req.params.id);
+        if (!t) throw new HttpError(404, `The catalogue has no template ${req.params.id}`);
+        if (!t.arch.includes(arch)) throw new HttpError(409, `${t.name} is not available for ${arch} processors`);
+        const body = (req.body ?? {}) as { id?: string; name?: string; version?: string; values?: Record<string, unknown>; deploy?: boolean };
+        const { env, problems } = resolveParams(t, body.values ?? {}, { random: (n) => randomBytes(n), timezone: timezone() });
+        const app = fromBody({
+          id: body.id ?? t.id,
+          name: body.name || t.name,
+          description: t.description,
+          type: 'compose',
+          version: body.version || t.version,
+          spec: { compose: t.compose, catalog: { id: t.id, ...(t.web ? { web: t.web } : {}) } },
+          environment: env,
+          ports: templatePorts(t, env),
+          domains: [],
+        });
+        problems.push(...validateApp(app, true));
+        if (app.id && APP_ID_RE.test(app.id) && (await ctx.database.get('SELECT id FROM applications WHERE id = ?', [app.id]))) problems.push(`An application with id ${app.id} exists`);
+        if (!problems.length) problems.push(...(await portProblems(app.ports)));
+        if (problems.length) throw new HttpError(400, `${t.name} cannot be installed`, problems);
+        if (body.deploy !== false) {
+          if (!hasPermission(req.user.permissions, 'applications.deploy')) throw new HttpError(403, 'Installing and starting an application needs the applications.deploy permission; install it without deploying instead');
+          await requireCapability(app);
+        }
+        await ctx.database.run('INSERT INTO applications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)', [app.id, app.name, app.description, app.type, JSON.stringify(app.spec), JSON.stringify(app.environment), JSON.stringify(app.ports), JSON.stringify(app.domains), app.version, app.createdAt, app.updatedAt]);
+        ctx.events.publish('applications.created', { app: app.id, type: app.type, catalog: t.id });
+        ctx.logger.info(`Installed ${t.name} from the catalogue as ${app.id}`);
+        // Pulling images can take minutes on a slow connection: deploy in the background. The
+        // deployment is recorded with its log, and a failure is reported as a notification.
+        if (body.deploy !== false) void deploy(app, app.version, req.user).catch((e) => ctx.logger.warn(`Deploying ${app.id} failed: ${(e as Error).message.split('\n')[0]}`));
+        return { app: redact(app), deploying: body.deploy !== false };
+      }, { permission: 'applications.write', audit: 'applications.catalog.install' });
 
       ctx.http.post('/apps', async (req) => {
         const app = fromBody(req.body ?? {});
