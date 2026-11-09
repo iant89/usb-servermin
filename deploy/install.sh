@@ -44,8 +44,12 @@ fi
 for cmd in sudo python3 tar; do command -v "$cmd" >/dev/null || { echo "Missing $cmd (apt-get install -y $cmd)" >&2; exit 1; }; done
 
 # ── Service account ──────────────────────────────────────────────────────────────
+# Create the group explicitly: useradd only makes one when USERGROUPS_ENAB is on in /etc/login.defs.
+getent group servermin >/dev/null || groupadd --system servermin
 if ! id servermin >/dev/null 2>&1; then
-  useradd --system --home-dir /var/lib/servermin --create-home --shell /bin/bash --comment "Server Control" servermin
+  useradd --system --gid servermin --home-dir /var/lib/servermin --create-home --shell /bin/bash --comment "Server Control" servermin
+elif [[ "$(id -gn servermin)" != "servermin" ]]; then
+  usermod -g servermin servermin
 fi
 for g in systemd-journal adm docker; do getent group "$g" >/dev/null && usermod -aG "$g" servermin; done
 if getent group docker >/dev/null; then
