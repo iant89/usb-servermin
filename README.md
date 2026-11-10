@@ -37,6 +37,7 @@ The UI is built with [ENTERPRISE-UI](https://github.com/iant89/ENTERPRISE-UI) on
 - [Writing a module](#writing-a-module)
 - [CLI](#cli)
 - [Testing](#testing)
+- Servermin transformation: [Roadmap](docs/roadmap.md) · [Project state](docs/project-state.md) · [Current state](docs/architecture/current-state.md) · [Target state](docs/architecture/target-state.md) · [Migration plan](docs/architecture/migration-plan.md)
 - Further reading: [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md) · [Releases and updates](docs/releases.md)
 
 ## Quick start (development)
