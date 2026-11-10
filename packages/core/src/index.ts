@@ -13,3 +13,13 @@ export { AuditLog } from './audit/audit';
 export { AgentService, deriveCapabilities, type AgentReport, type AgentModuleInfo, type AgentState } from './agent/agent-service';
 export { IdentityStore, parseIdentity, readHardwareIdentity, readMachineId, isUuid, type AgentIdentity, type HardwareIdentity } from './agent/identity';
 export { CORE_VERSION } from './version';
+// Building blocks reused by the Manager (ADR-001).
+export { ACCOUNT_SCHEMA, AUDIT_SCHEMA, KV_SCHEMA } from './database/database';
+export { AuthError, type UserRecord } from './auth/auth-service';
+export { SetupToken } from './auth/setup-token';
+export { HttpServer, errorStatus, type HttpHost, type ErrorResponse } from './http/server';
+export { Router, type CoreHandler } from './http/router';
+export { registerAccountRoutes, type AccountRouteDeps } from './http/account-routes';
+export { ApiError, asString, requireFields, type RequestContext } from './http/util';
+export { WebSocketGateway, type GatewayHost, type CoreChannel } from './websocket/gateway';
+export { ChannelHub, type ChannelClient } from './websocket/channel-hub';

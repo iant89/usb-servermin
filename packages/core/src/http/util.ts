@@ -4,6 +4,9 @@ import { randomUUID } from 'node:crypto';
 import type { RequestUser } from '@servermin/sdk';
 import type { UserRecord } from '../auth/auth-service';
 
+/** Session cookie of the agent's local interface. */
+export const SESSION_COOKIE = 'sm_session';
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
