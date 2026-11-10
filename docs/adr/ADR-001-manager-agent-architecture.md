@@ -1,6 +1,6 @@
 # ADR-001: Manager/Agent architecture built on the existing core
 
-- Status: **Proposed** (to be accepted or revised when Phase 1 starts)
+- Status: **Accepted** (2026-11-10, when Phase 1 started on this basis)
 - Date: 2026-11-10
 
 ## Context

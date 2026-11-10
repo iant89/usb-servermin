@@ -53,8 +53,9 @@ function release(arch, runtimeDir) {
   mkdirSync(join(out, 'cli'));
   copy('packages/cli/dist/serverctl.js', 'cli/serverctl.js');
   copy('packages/cli/dist/verify.js', 'cli/verify.js');
+  copy('packages/cli/dist/servermin-agent.js', 'cli/servermin-agent.js');
   mkdirSync(join(out, 'bin'));
-  for (const f of ['server-control', 'serverctl', 'servermin-verify', 'servermin-update', 'node-launcher.sh']) copy(`deploy/${f}`, `bin/${f}`);
+  for (const f of ['server-control', 'servermin-agent', 'serverctl', 'servermin-verify', 'servermin-update', 'node-launcher.sh']) copy(`deploy/${f}`, `bin/${f}`);
   copy('deploy/servermin-update.mjs', 'bin/servermin-update.mjs');
   mkdirSync(join(out, 'deploy'));
   for (const f of ['server-control.service', 'sudoers', 'servermin-privileged', 'config.json']) copy(`deploy/${f}`, `deploy/${f}`);

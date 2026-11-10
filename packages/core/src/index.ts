@@ -1,5 +1,5 @@
 export { Platform, type PlatformOptions } from './platform';
-export { loadConfig, defaultConfig, mergeConfig, type CoreConfig } from './config/config';
+export { loadConfig, defaultConfig, mergeConfig, agentStateDir, type CoreConfig } from './config/config';
 export { EventBus } from './events/event-bus';
 export { Database, CORE_MIGRATIONS } from './database/database';
 export { ProcessService, ProcessError } from './process/process-service';
@@ -10,4 +10,6 @@ export { hashPassword, verifyPassword } from './auth/passwords';
 export { AttemptLimiter, TokenBucket } from './auth/rate-limit';
 export { LogService } from './logging/logger';
 export { AuditLog } from './audit/audit';
+export { AgentService, deriveCapabilities, type AgentReport, type AgentModuleInfo, type AgentState } from './agent/agent-service';
+export { IdentityStore, parseIdentity, readHardwareIdentity, readMachineId, isUuid, type AgentIdentity, type HardwareIdentity } from './agent/identity';
 export { CORE_VERSION } from './version';

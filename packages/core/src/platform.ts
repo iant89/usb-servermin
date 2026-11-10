@@ -3,10 +3,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import type { HealthStatus, LogLevel } from '@servermin/sdk';
+import { AgentService } from './agent/agent-service';
 import { AuditLog } from './audit/audit';
 import { AuthService } from './auth/auth-service';
 import { randomToken } from './auth/passwords';
-import type { CoreConfig } from './config/config';
+import { agentStateDir, type CoreConfig } from './config/config';
 import { CORE_MIGRATIONS, Database } from './database/database';
 import { EventBus } from './events/event-bus';
 import type { PlatformSettings } from './http/api';
@@ -46,6 +47,7 @@ export class Platform {
   processes!: ProcessService;
   modules!: ModuleManager;
   updates!: UpdateService;
+  agent!: AgentService;
   http!: HttpServer;
   gateway!: WebSocketGateway;
   address: { port: number; host: string } | null = null;
@@ -102,6 +104,21 @@ export class Platform {
       workerScript: this.options.workerScript ?? join(dirname(fileURLToPath(import.meta.url)), 'module-host.js'),
     });
     this.updates = new UpdateService(this);
+    this.agent = new AgentService({
+      stateDir: agentStateDir(this.config),
+      logger: this.logs.logger('agent'),
+      modules: () => this.modules.list().map((m) => ({ id: m.id, version: m.version, state: m.state, health: m.health.status, provides: m.provides, tags: m.capabilities })),
+      health: () => this.health().status,
+      serverName: () => this.settings().serverName,
+    });
+    const { replaced } = this.agent.start();
+    if (replaced)
+      this.notifications.notify({
+        title: 'Agent identity replaced',
+        message: `The identity file was unreadable (${replaced.reason}) and a new identity was created. A Servermin Manager will see this server as new. The old file was kept as ${replaced.keptAs}.`,
+        tone: 'error',
+        permission: 'platform.config',
+      });
     this.ensureSetupToken();
 
     // The API is available before modules finish loading so a broken module never locks users out.
@@ -115,6 +132,7 @@ export class Platform {
     this.log.info(`Modules: ${states.join(', ') || 'none installed'}`);
 
     this.updates.start();
+    this.agent.setState('RUNNING');
 
     this.pruneTimer = setInterval(() => void this.logs.prune(this.config.logging.retentionDays), 3_600_000);
     this.pruneTimer.unref();
@@ -194,6 +212,7 @@ export class Platform {
 
   async stop() {
     this.log.info('Shutting down');
+    this.agent?.setState('STOPPING');
     if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.updates?.stop();
     this.gateway?.close();

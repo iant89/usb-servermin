@@ -42,7 +42,7 @@ without rewriting what works. Phase numbers are those of [the roadmap](../roadma
 **Phase 1 — Agent foundation.** Add `packages/core/src/agent/`: identity store, an `agent`
 configuration section (off by default), an aggregated capability list from the module manager, and a
 local report (`GET /api/v1/agent`, `servermin-agent status`) with server id, agent id, hostname, OS,
-version and capabilities. Rename the unit with an alias. ADR-003.
+version and capabilities. Add `servermin-agent.service` as an alias of the unit. ADR-003. **Done.**
 *Proof:* integration test starts a core and reads the report; identity survives a restart;
 `systemd-analyze verify` on the unit; `servermin-verify` extended.
 
@@ -77,7 +77,7 @@ Post-MVP order follows roadmap §59.
 | Agent = evolved core, Manager = separate process reusing core libraries | Phase 1 | Yes (ADR-001) |
 | Manager TLS: self-signed with pinned fingerprint handed out with the registration code, or bring-your-own certificate | Phase 3 | Support both; pinning by default |
 | Portable installation booted on other hardware: same server or new server | Phase 1 | Same server, hardware-changed event |
-| Repository and product renames | Phase 1 (unit name) | Rename unit and CLI with aliases; leave the repository name to the owner |
+| Repository and product renames | Phase 1 (unit name) | Alias now, swap later (see target state §10); leave the repository name to the owner |
 | Docker without the docker group | Phase 11 | Keep today's behaviour until then; record as technical debt |
 
 ## Risks
@@ -85,7 +85,7 @@ Post-MVP order follows roadmap §59.
 | Risk | Mitigation |
 | --- | --- |
 | The refactor for reuse breaks the standalone server | Interface extraction only, existing tests as the gate, done in its own commit |
-| Renaming the unit breaks the helper's self-protection or the updater's health check | Helper and updater accept both names for one major version; covered by helper tests |
+| Renaming the unit breaks the helper's self-protection or an update rollback | Phase 1 only adds an alias; helper, Services module and updater already accept both names, covered by tests |
 | A Manager compromise becomes fleet compromise | Typed commands only, agent-side policy, per-agent revocable keys, no Manager-held host credentials |
 | Mocked tests give false confidence for Linux behaviour | Add a CI job on a real Ubuntu runner with systemd for agent install/start/reconnect before the MVP is called done (roadmap §52) |
 | Metric and event volume on a small Manager | Agents keep history; the Manager stores coarse series and bounded events |

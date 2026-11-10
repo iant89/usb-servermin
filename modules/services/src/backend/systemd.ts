@@ -75,6 +75,6 @@ export function parseJournal(text: string) {
 
 export const UNIT_RE = /^[A-Za-z0-9@_.:\\-]{1,200}\.service$/;
 /** Units this module refuses to stop or disable. */
-export const SELF_UNITS = ['server-control.service', 'servermin.service'];
+export const SELF_UNITS = ['servermin-agent.service', 'server-control.service', 'servermin.service'];
 /** Units whose stop/disable can cut remote access: allowed only with confirmation. */
 export const CRITICAL_UNITS = ['ssh.service', 'sshd.service', 'systemd-networkd.service', 'NetworkManager.service', 'systemd-resolved.service', 'dbus.service', 'systemd-journald.service', 'systemd-logind.service', 'networking.service'];

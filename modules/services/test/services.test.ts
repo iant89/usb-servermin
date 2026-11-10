@@ -42,6 +42,8 @@ describe('services module', () => {
     const t = createTestContext(manifest as any, { commands });
     await t.start(services);
     expect((await t.request('POST', '/services/server-control/stop')).status).toBe(403);
+    expect((await t.request('POST', '/services/servermin-agent/stop')).status).toBe(403);
+    expect((await t.request('POST', '/services/servermin-agent.service/restart', { body: { confirm: true } })).status).toBe(403);
     expect((await t.request('POST', '/services/ssh.service/stop', { body: {} })).status).toBe(428);
     expect((await t.request('POST', '/services/ssh.service/stop', { body: { confirm: true } })).status).toBe(200);
     expect((await t.request('POST', '/services/nginx/restart', { body: {} })).status).toBe(200);

@@ -46,7 +46,7 @@ reviewed and documented — nothing less).
 | # | Phase | Status | Exit criteria |
 | --- | --- | --- | --- |
 | 0 | Architecture audit | [x] | The current system can be explained without guessing |
-| 1 | Agent foundation | [ ] | Agent starts automatically and reports server id, agent id, hostname, OS, version, capabilities |
+| 1 | Agent foundation | [x] | Agent starts automatically and reports server id, agent id, hostname, OS, version, capabilities |
 | 2 | Manager foundation | [ ] | Manager starts independently and keeps a persistent server inventory |
 | 3 | Agent/Manager protocol | [ ] | Agent disconnects and reconnects without manual intervention |
 | 4 | Server registration | [ ] | Code → install → `servermin-agent register CODE` → approve → managed |
@@ -93,16 +93,21 @@ reviewed and documented — nothing less).
 - [x] Identify USB-specific assumptions
 - [x] `docs/architecture/current-state.md`, `target-state.md`, `migration-plan.md`
 
-### Phase 1 — Agent foundation `[ ]`
+### Phase 1 — Agent foundation `[x]`
 
-- [ ] Agent identity (server id, agent id, hostname, machine id)
-- [ ] Agent configuration
-- [ ] Agent systemd service
-- [ ] Agent lifecycle
-- [ ] Agent logging
-- [ ] Agent health
-- [ ] Agent version
-- [ ] Agent capabilities
+- [x] Agent identity (server id, agent id, hostname, machine id) — `core/src/agent/identity.ts`, ADR-003
+- [x] Agent configuration — `agent.stateDir`
+- [x] Agent systemd service — existing unit, now also `servermin-agent.service` (alias)
+- [x] Agent lifecycle — `STARTING` / `RUNNING` / `STOPPING`
+- [x] Agent logging — log source `agent`
+- [x] Agent health — core health in the report
+- [x] Agent version
+- [x] Agent capabilities — derived from working modules
+- [x] Report: `GET /api/v1/agent`, `servermin-agent status`, `servermin-verify` check
+
+Not verified under a running systemd (none in the build environment): that the alias resolves
+for `systemctl status servermin-agent`. Unit-file operations were verified with the real
+`systemctl`; `servermin-verify` warns on a server where the alias is missing.
 
 ### Phase 2 — Manager foundation `[ ]`
 

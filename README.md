@@ -229,6 +229,10 @@ serverctl update auto on|off [--window 03:00]
 serverctl update rollback [--yes]
 ```
 
+`servermin-agent` describes the server itself: `sudo servermin-agent status` prints its server id,
+agent id, hostname, version and state; after `serverctl login` it also lists the capabilities the
+active modules provide.
+
 ## Testing
 
 `npm test` runs:

@@ -17,6 +17,7 @@ This document maps the design specification to the implementation.
 | Component | File |
 | --- | --- |
 | Platform (wiring, health, settings, setup token) | `core/src/platform.ts` |
+| Agent: identity, capabilities, self-report ([ADR-003](adr/ADR-003-server-identity.md)) | `core/src/agent/*` |
 | Module manager: lifecycle, dependencies, install/update/remove, health, hot reload | `core/src/modules/module-manager.ts` |
 | Module instance: one worker, its resources and cleanup | `core/src/modules/module-instance.ts` |
 | Worker host: builds `ModuleContext` inside the worker | `core/src/modules/worker-host.ts` |
@@ -93,6 +94,27 @@ All lifecycle operations run through one queue in the manager, so they never int
 Service calls (`ctx.services.call('docker.engine', 'listContainers')`) are routed by the core to
 the provider's worker. A caller can only call services it declared in `requires`.
 
+## Agent
+
+Every server is a Servermin agent, whether or not a Manager exists
+([ADR-001](adr/ADR-001-manager-agent-architecture.md)). `AgentService` loads the identity before
+the HTTP server listens and answers `GET /api/v1/agent` (any signed-in user):
+
+```json
+{ "serverId": "…", "agentId": "…", "name": "Saturn", "hostname": "saturn", "machineId": "…",
+  "hardware": { "vendor": "…", "product": "…", "board": "…", "fingerprint": "…" },
+  "os": { "name": "Ubuntu 24.04.5 LTS", "id": "ubuntu", "version": "24.04", "kernel": "…", "arch": "x64" },
+  "version": "1.0.0", "state": "RUNNING", "health": "HEALTHY", "startedAt": "…", "uptimeSeconds": 42,
+  "capabilities": ["docker", "docker.engine", "storage"],
+  "modules": [{ "id": "docker", "version": "1.1.0", "state": "ACTIVE", "health": "HEALTHY", "provides": ["docker.engine"], "tags": ["containers"] }] }
+```
+
+- `state` is `STARTING` until modules have initialised, then `RUNNING`, and `STOPPING` during shutdown.
+- `capabilities` is derived on every request: the id and the provided services of each module that
+  is `ACTIVE` and whose health check is not `ERROR` or `OFFLINE`. Docker with the engine down is
+  active but contributes nothing. Nothing in the core names a module.
+- The public `health` endpoint does not include the identity.
+
 ## Events
 
 `EventBus` delivers `PlatformEvent { type, source, timestamp, payload }` with patterns (`docker.container.*`,
@@ -115,7 +137,7 @@ Core events: `module.installed`, `module.removed`, `module.loaded`, `module.unlo
 
 ## REST API
 
-Core endpoints (`/api/v1`): `health`, `auth/*`, `users`, `permissions`, `config`, `system`, `events`,
+Core endpoints (`/api/v1`): `health`, `agent`, `auth/*`, `users`, `permissions`, `config`, `system`, `events`,
 `logs`, `audit`, `notifications`, `platform/modules[/:id[/enable|disable|reload|restart|update|config|logs|upload]]`,
 `platform/modules/discover`, `platform/frontend`, `platform/health`, and `modules` (list).
 

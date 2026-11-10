@@ -25,7 +25,8 @@ done
 
 if [[ $UNINSTALL -eq 1 ]]; then
   systemctl disable --now server-control.service 2>/dev/null || true
-  rm -f /etc/systemd/system/server-control.service /etc/sudoers.d/servermin /usr/local/bin/serverctl /usr/local/bin/servermin-verify
+  rm -f /etc/systemd/system/server-control.service /etc/systemd/system/servermin-agent.service /etc/sudoers.d/servermin
+  rm -f /usr/local/bin/serverctl /usr/local/bin/servermin-verify /usr/local/bin/servermin-agent
   rm -rf "$APP" "$APP.previous" /usr/lib/servermin
   systemctl daemon-reload
   echo "Removed. Data in /var/lib/servermin and configuration in /etc/servermin were kept."
@@ -114,14 +115,17 @@ for d in /var/lib/servermin /var/log/servermin /var/tmp/servermin /var/lib/serve
 
 ln -sf "$APP/bin/serverctl" /usr/local/bin/serverctl
 ln -sf "$APP/bin/servermin-verify" /usr/local/bin/servermin-verify
+ln -sf "$APP/bin/servermin-agent" /usr/local/bin/servermin-agent
 install -d -m 750 -o servermin -g servermin /var/tmp/servermin/updates
 install -m 644 "$SRC/deploy/server-control.service" /etc/systemd/system/server-control.service
 systemctl daemon-reload
+# Enabling also creates the servermin-agent.service alias the unit declares (on upgrades too).
 systemctl enable --now server-control.service
 
 echo
 echo "Server Control is running:  systemctl status server-control"
 echo "Runtime: $([[ -x $APP/node/bin/node ]] && echo "bundled Node.js $($APP/node/bin/node --version)" || echo "system Node.js $($NODE --version)")"
+echo "This server's identity:  sudo servermin-agent status"
 echo "Check the installation:   sudo servermin-verify"
 sleep 2
 if [[ -f /var/lib/servermin/setup-token ]]; then

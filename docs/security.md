@@ -15,6 +15,13 @@ Server Control is a privileged administration interface. These are the mechanism
 - Login lockout after `auth.loginAttempts` failures per IP and user, for `auth.lockoutMinutes`. A failed
   login takes the same time whether or not the user exists.
 
+## Agent identity
+
+The server id and agent id ([ADR-003](adr/ADR-003-server-identity.md)) are identifiers, not
+credentials: every signed-in user can read them at `/api/v1/agent`, and nothing accepts them as
+proof of identity. The identity file is mode 0600 so that only the service account can *change*
+which server this is. The public health endpoint does not reveal them.
+
 ## Authorization
 
 - Users hold permissions directly (presets: Administrator `*`, Operator, Viewer). Wildcards: `docker.*`.

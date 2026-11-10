@@ -18,7 +18,7 @@ accepted in the phase that implements them.
    privilege helper               privilege helper               privilege helper
 ```
 
-## 2. The Agent is today's core (Proposed, ADR-001)
+## 2. The Agent is today's core (ADR-001)
 
 The existing `server-control` process already is what the roadmap calls an agent: a systemd service
 with module execution, hardware discovery, metrics, Docker, storage, network, services, logs,
@@ -35,7 +35,7 @@ Rejected alternative: a separate lightweight agent binary next to the core. It w
 process supervision, configuration, updates and the privilege boundary, and every module would need
 a second way to be reached.
 
-## 3. The Manager is a new process that reuses core building blocks (Proposed, ADR-001)
+## 3. The Manager is a new process that reuses core building blocks (ADR-001)
 
 New workspace `packages/manager` with its own entry point, unit (`servermin-manager.service`),
 configuration (`/etc/servermin/manager.json`) and database (`manager.db`). It reuses from
@@ -60,19 +60,19 @@ New workspace `packages/protocol`: message types, validation and version negotia
 id. Both sides import the same code, so a schema change cannot drift. No new runtime dependency:
 validation is hand-written, as the manifest validation already is.
 
-## 5. Identity (Proposed, ADR-003 in Phase 1)
+## 5. Identity ([ADR-003](../adr/ADR-003-server-identity.md), implemented in Phase 1)
 
 | Field | Source | Lifetime |
 | --- | --- | --- |
 | Agent ID | Random UUID created on first start, stored in the data directory (root-readable, 0600) | The installation |
-| Server ID | Assigned by the Manager at registration | The inventory entry |
+| Server ID | Random UUID created on first start; a Manager may replace it at registration to attach a reinstalled agent to a known server | The inventory entry |
 | Machine ID | `/etc/machine-id` | The OS installation; reported, never trusted as a key |
 | Hardware fingerprint | DMI product UUID / board serial where readable | The physical machine |
 | Hostname | `os.hostname()` | Changeable; display only |
 
-A portable installation booted on different hardware keeps its Agent ID while the hardware
-fingerprint changes. The Manager records that as an event on the same server rather than a new
-server; ADR-003 settles whether an administrator must confirm it.
+A portable installation booted on different hardware keeps both ids while the hardware
+description changes. The Manager records that as an event on the same server rather than a new
+server. The ids are identifiers, not secrets.
 
 ## 6. Security boundary
 
@@ -122,12 +122,15 @@ is decided in Phase 8; the protocol in Phase 3 must not preclude the proxy appro
 | Today | Target | When |
 | --- | --- | --- |
 | Product "Server Control" | Servermin (Manager, Agent) | With the first Manager release |
-| `server-control.service` | `servermin-agent.service`, old name kept as an alias | Phase 1 |
-| `serverctl` | `servermin` (Manager API) and `servermin-agent` (local: `register`, `status`); `serverctl` kept as an alias | Phases 4 and 34 |
+| `server-control.service` | Phase 1: `servermin-agent.service` is an **alias**; the unit file keeps its name. Later: swap them | The swap waits until every release that can still update directly has an updater that handles both names (the Phase 1 updater is the first) |
+| `serverctl` | `servermin` (Manager API) and `servermin-agent` (local: `status`, `id` since Phase 1; `register` in Phase 4); `serverctl` kept as an alias | Phases 4 and 34 |
 | Repository `usb-servermin` | Owner's decision | Any time; GitHub redirects, and `updates.repository` is configuration |
 
-Renames ship through the signed updater, which already replaces the unit and the helper, so
-installed servers migrate without manual steps.
+Why the unit file was not simply renamed: the updater that runs during an update is the one of
+the *installed* release. If the new release fails its health check, the 1.0.0 updater puts
+`server-control.service` back as a file and starts it, but does not enable it; had the new
+release moved the enablement to another unit name, the server would run until the next reboot and
+then stay down. Keeping the file name and adding an alias has no such state.
 
 ## 11. What stays exactly as it is
 
