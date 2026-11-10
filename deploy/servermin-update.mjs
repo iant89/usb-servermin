@@ -239,6 +239,8 @@ async function restorePrevious(fromVersion, reason) {
   }
   restoreDatabase(join(STATE, `pre-update-${fromVersion}`));
   run(SYSTEMCTL, ['start', unit], { check: false });
+  // A Manager on this server runs from the same program directory: put it on the restored code too.
+  run(SYSTEMCTL, ['try-restart', 'servermin-manager.service'], { check: false });
   await waitHealthy(fromVersion);
 }
 

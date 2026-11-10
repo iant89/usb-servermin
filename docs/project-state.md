@@ -7,12 +7,13 @@ Last updated: 2026-11-10
 
 ## Current phase
 
-Phase 2 — Manager foundation (not started).
+Phase 3 — Agent/Manager protocol (not started).
 
 ## Completed phases
 
 - Phase 0 — Architecture audit (2026-11-10)
 - Phase 1 — Agent foundation (2026-11-10)
+- Phase 2 — Manager foundation (2026-11-10)
 
 ## Active work
 
@@ -42,6 +43,17 @@ Nothing.
   that are `ACTIVE` and not `ERROR`/`OFFLINE`; manifest `capabilities` tags are reported per module
   as `tags` and left for Phase 9 to formalise.
 
+## What Phase 2 added
+
+- Refactor (own commit, no behaviour change): `HttpHost` / `GatewayHost` interfaces,
+  `registerAccountRoutes`, `SetupToken`, shared schema fragments, core channels in their own file.
+- `packages/manager`: `Manager`, `Inventory`, configuration, routes, entry point
+  ([manager.md](manager.md)).
+- `servermin-manager.service` (sandboxed, account `servermin-manager`), launcher,
+  `install.sh --manager`; the updater restarts a Manager after a rollback.
+- Decisions: a separate account with no sudo rule; session cookie `smm_session`; default port 8480;
+  logs to the journal only; one `servers` table (an `agents` table waits for registration, Phase 4).
+
 ## What Phase 1 added
 
 - `packages/core/src/agent/`: `IdentityStore`, host identity facts, `AgentService`.
@@ -60,8 +72,8 @@ From the Phase 0 audit
 2. Criticality (own unit, protected mounts) is hard-coded in the privilege helper.
 3. Events are kept only in a 200-entry in-memory ring.
 4. The audit log has no duration, correlation id or server.
-5. `HttpServer`, `WebSocketGateway` and `UpdateService` depend on the concrete `Platform`
-   (first task of Phase 2).
+5. `UpdateService` still depends on the concrete `Platform` (the HTTP and WebSocket stack no
+   longer does).
 6. No TLS by default and no certificate tooling.
 
 From Phase 1:
@@ -75,11 +87,24 @@ From Phase 1:
     state is consistent (verified), but the leftover `servermin-agent.service` link points at the
     1.0.0 unit until the next successful install recreates it. Harmless.
 
+From Phase 2:
+
+11. The Manager has no web interface (Phase 8) and no CLI (Phase 34); it is driven with `curl`.
+12. The updater snapshots and restores only the agent's `core.db`. A Manager schema migration that
+    is followed by a rollback would leave `manager.db` ahead of the code. Needs solving before the
+    second Manager migration ships (Phase 19 at the latest).
+13. The Manager's health is not part of the updater's health check; a release whose Manager fails
+    to start is not rolled back.
+14. Without TLS the Manager serves passwords in clear text, like the agent. Phase 3 must make TLS
+    the default for the Manager.
+15. `servermin-verify` does not check a Manager installation.
+
 ## Technical debt
 
-- No automated tests on a host with systemd running; `servermin-verify` is manual. Phase 1 was
-  checked by hand in a container: real `install.sh`, real `systemctl` unit-file operations, the
-  agent started as the `servermin` account.
+- No automated tests on a host with systemd running; `servermin-verify` is manual. Phases 1 and 2
+  were checked by hand in a container: real `install.sh`, real `systemctl` unit-file operations,
+  agent and Manager started as their own accounts. The Manager unit's sandbox was not exercised.
+- `npm run dev` does not start a Manager.
 - Two unit names until the swap described under *Open decisions*.
 - "Capability" still means two things in the manifest (`provides` services and `capabilities` tags).
 - The core's `host-info.ts`, the System module and now `agent/identity.ts` each read host facts.
@@ -89,18 +114,27 @@ From Phase 1:
 
 ## Test status
 
-2026-11-10, end of Phase 1: `npm run typecheck` clean, `npm run build` clean, `npm test`
-30 files / 267 tests passing (Node.js 22.23.4). New: `packages/core/test/agent.test.ts`,
-`tests/integration/agent.test.ts`, `packages/cli/test/packaging.test.ts`, updater rollback across
-unit names, helper and Services self-protection for both names.
+2026-11-10, end of Phase 2: `npm run typecheck` clean, `npm run build` clean, `npm test`
+33 files / 309 tests passing (Node.js 22.23.4). Added in Phase 2: `packages/core/test/schema.test.ts`
+(the refactored schema equals the 1.0.0 one), `packages/manager/test/manager.test.ts`,
+`tests/integration/manager.test.ts` (independent start, setup token, inventory CRUD and audit,
+persistence across restart, permissions, CSRF/token/lockout, cookie separation from an agent,
+WebSocket, the built program's exit codes, and that it contains no process-spawning code).
 
 ## Next phase
 
-Phase 2 — Manager foundation. Plan in
-[migration-plan.md](architecture/migration-plan.md#sequence-for-the-mvp-phases-18-13-15-20):
+Phase 3 — Agent/Manager protocol. Plan:
 
-1. Narrow `HttpServer` and `WebSocketGateway` to a host interface, with no behaviour change and
-   the existing tests as the gate (own commit).
-2. `packages/manager`: entry point, configuration, `manager.db` with `servers` and `agents`,
-   authentication reusing `AuthService` and the setup token, inventory API, unit file.
-3. Test: the Manager starts with no agent code loaded and its inventory survives a restart.
+1. ADR-002: transport (WebSocket over TLS, opened by the agent), trust (pinned Manager
+   certificate by default), message envelope, version negotiation.
+2. `packages/protocol`: message types and validation shared by both sides.
+3. Agent link in `packages/core/src/agent/`: connect, authenticate, heartbeat, timeout, jittered
+   backoff, connection state; `agent.manager` configuration.
+4. Manager endpoint for agents, separate from the browser WebSocket; server state from the
+   connection (`ONLINE`, `STALE`, `OFFLINE`); duplicate agent id detection.
+5. Tests with real processes: kill the Manager, drop the socket mid-message, stall heartbeats,
+   malformed and oversized frames.
+
+Authentication of agents needs credentials that only registration (Phase 4) issues. Phase 3 should
+therefore define and test the authentication handshake against a key enrolled directly in the
+Manager database by the test, and Phase 4 adds the registration flow that enrols it.

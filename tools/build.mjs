@@ -29,6 +29,18 @@ export async function buildCore(outdir = join(root, 'packages/core/dist')) {
     external: ['bufferutil', 'utf-8-validate'],
   });
   await esbuild.build({
+    entryPoints: { manager: join(root, 'packages/manager/src/main.ts') },
+    outdir: join(root, 'packages/manager/dist'),
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node22',
+    sourcemap: 'linked',
+    banner,
+    logLevel: 'warning',
+    external: ['bufferutil', 'utf-8-validate'],
+  });
+  await esbuild.build({
     entryPoints: { serverctl: join(root, 'packages/cli/src/main.ts'), verify: join(root, 'packages/cli/src/verify.ts'), 'servermin-agent': join(root, 'packages/cli/src/agent-main.ts') },
     outdir: join(root, 'packages/cli/dist'),
     bundle: true,
@@ -51,7 +63,7 @@ if (process.argv[1] === import.meta.filename) {
   const started = Date.now();
   if (!modulesOnly) {
     await buildCore();
-    console.log('✓ core, worker host and CLI');
+    console.log('✓ core, worker host, Manager and CLI');
     execFileSync(process.execPath, [join(root, 'node_modules/vite/bin/vite.js'), 'build', '--config', join(root, 'packages/shell/vite.config.ts')], { stdio: 'inherit', cwd: root });
     console.log('✓ shell');
   }

@@ -49,8 +49,8 @@ version and capabilities. Add `servermin-agent.service` as an alias of the unit.
 **Phase 2 — Manager foundation.** Narrow `HttpServer`/`WebSocketGateway` to a host interface (no
 behaviour change), then add `packages/manager` with its own database (`servers`, `agents`), reusing
 auth and the setup token. ADR-001 accepted here.
-*Proof:* all 226 existing tests unchanged; new integration test starts a Manager with no agent code
-loaded and persists an inventory across a restart.
+*Proof:* all existing tests unchanged; new integration test starts a Manager with no agent code
+loaded and persists an inventory across a restart. **Done.**
 
 **Phase 3 — Protocol.** `packages/protocol`, agent link with heartbeat, timeout, jittered backoff
 and connection states; Manager endpoint. ADR-002.

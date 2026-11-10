@@ -47,7 +47,7 @@ reviewed and documented — nothing less).
 | --- | --- | --- | --- |
 | 0 | Architecture audit | [x] | The current system can be explained without guessing |
 | 1 | Agent foundation | [x] | Agent starts automatically and reports server id, agent id, hostname, OS, version, capabilities |
-| 2 | Manager foundation | [ ] | Manager starts independently and keeps a persistent server inventory |
+| 2 | Manager foundation | [x] | Manager starts independently and keeps a persistent server inventory |
 | 3 | Agent/Manager protocol | [ ] | Agent disconnects and reconnects without manual intervention |
 | 4 | Server registration | [ ] | Code → install → `servermin-agent register CODE` → approve → managed |
 | 5 | Server inventory | [ ] | Manager accurately reflects server state |
@@ -109,12 +109,19 @@ Not verified under a running systemd (none in the build environment): that the a
 for `systemctl status servermin-agent`. Unit-file operations were verified with the real
 `systemctl`; `servermin-verify` warns on a server where the alias is missing.
 
-### Phase 2 — Manager foundation `[ ]`
+### Phase 2 — Manager foundation `[x]`
 
-- [ ] Manager service, configuration, database
-- [ ] Authentication foundation
-- [ ] Server inventory
-- [ ] API and WebSocket foundation
+- [x] Manager service — `packages/manager`, `servermin-manager.service`, own account, `install.sh --manager`
+- [x] Manager configuration — `/etc/servermin-manager/config.json`, validated, environment overrides
+- [x] Manager database — `manager.db`, numbered migrations
+- [x] Authentication foundation — the agent's `AuthService` and account endpoints, own users and cookie
+- [x] Server inventory — `servers` table, CRUD API, audit; every server `UNKNOWN` until Phase 3
+- [x] API foundation — the agent's `HttpServer` through `HttpHost`
+- [x] WebSocket foundation — the agent's gateway through `GatewayHost`; `inventory` channel
+
+Not verified under a running systemd: the sandbox settings of the Manager unit (`ProtectSystem`,
+`RestrictAddressFamilies`, …). The unit passes `systemd-analyze verify`, and the program was run
+as the `servermin-manager` account from a real installation, but not inside that sandbox.
 
 ### Phase 3 — Agent/Manager protocol `[ ]`
 

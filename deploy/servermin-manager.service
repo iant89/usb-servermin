@@ -1,0 +1,61 @@
+# Servermin Manager (systemd unit): the central service that keeps the server inventory.
+#
+# It runs as its own account, "servermin-manager", NOT as the agent's "servermin" account: that
+# account may run the privilege helper through sudo, and the Manager must never be able to. The
+# Manager needs no privileges at all, so unlike the agent's unit this one is locked down.
+
+[Unit]
+Description=Servermin Manager (central server inventory and control plane)
+Documentation=file:///opt/servermin/README.md
+After=network-online.target local-fs.target systemd-journald.socket
+Wants=network-online.target
+RequiresMountsFor=/opt/servermin
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=servermin-manager
+Group=servermin-manager
+Environment=NODE_ENV=production
+Environment=SERVERMIN_MANAGER_CONFIG=/etc/servermin-manager/config.json
+EnvironmentFile=-/etc/servermin-manager/environment
+ExecStart=/opt/servermin/bin/servermin-manager
+# /var/lib/servermin-manager, created and owned by systemd for the account above.
+StateDirectory=servermin-manager
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/servermin-manager
+Restart=on-failure
+RestartSec=3
+# A configuration error (exit 78) will not fix itself: do not restart in a loop.
+RestartPreventExitStatus=78
+TimeoutStopSec=30
+UMask=0077
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=servermin-manager
+
+# No privileges, and no way to gain any.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

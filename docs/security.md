@@ -15,6 +15,13 @@ Server Control is a privileged administration interface. These are the mechanism
 - Login lockout after `auth.loginAttempts` failures per IP and user, for `auth.lockoutMinutes`. A failed
   login takes the same time whether or not the user exists.
 
+## Manager
+
+The Servermin Manager is a separate service with a separate account that has no sudo rule and no
+access to the agent's files; see [manager.md](manager.md#security). It uses the authentication,
+authorization and request protections described on this page, with its own users and its own
+session cookie.
+
 ## Agent identity
 
 The server id and agent id ([ADR-003](adr/ADR-003-server-identity.md)) are identifiers, not

@@ -29,7 +29,8 @@ This document maps the design specification to the implementation.
 | Logging (live subscribers; batches persisted by the storage thread) | `core/src/logging/logger.ts` |
 | Storage thread: module databases, log persistence, checkpoints | `core/src/storage/*` |
 | Audit log | `core/src/audit/audit.ts` |
-| HTTP server, CSRF, rate limit, static files | `core/src/http/server.ts` |
+| HTTP server, CSRF, rate limit, static files (serves any `HttpHost`) | `core/src/http/server.ts` |
+| Sign-in, setup, tokens, users, audit endpoints (shared with the Manager) | `core/src/http/account-routes.ts` |
 | Core REST endpoints | `core/src/http/api.ts` |
 | WebSocket gateway and channel hub | `core/src/websocket/*` |
 
@@ -93,6 +94,14 @@ All lifecycle operations run through one queue in the manager, so they never int
 
 Service calls (`ctx.services.call('docker.engine', 'listContainers')`) are routed by the core to
 the provider's worker. A caller can only call services it declared in `requires`.
+
+## Manager
+
+`packages/manager` is a second program in the same release ([manager.md](manager.md)). It hosts the
+same `HttpServer`, `WebSocketGateway`, `AuthService`, `AuditLog`, `EventBus` and `Database` classes
+as the core, through the `HttpHost` and `GatewayHost` interfaces, with its own routes
+(`manager/src/routes.ts`), its own schema (`MANAGER_MIGRATIONS`: the shared account, audit and
+key-value tables plus `servers`) and no module runtime, process service or update service.
 
 ## Agent
 

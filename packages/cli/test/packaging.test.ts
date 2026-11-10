@@ -7,13 +7,14 @@ const read = (f: string) => readFileSync(join(root, f), 'utf8');
 
 /** A launcher that is installed but whose program is not in the release fails only on a real server. */
 describe('release contents', () => {
-  const launchers = readdirSync(join(root, 'deploy')).filter((f) => /\$APP\/(cli|server|bin)\//.test(read(`deploy/${f}`)) && !f.endsWith('.mjs') && !f.endsWith('.service'));
+  const launchers = readdirSync(join(root, 'deploy')).filter((f) => /\$APP\/(cli|server|bin|manager)\//.test(read(`deploy/${f}`)) && !f.endsWith('.mjs') && !f.endsWith('.service'));
   const packaging = read('tools/package.mjs');
 
   it.each(launchers)('ships the launcher %s and the program it starts', (launcher) => {
     expect(packaging).toContain(`'${launcher}'`);
-    const target = read(`deploy/${launcher}`).match(/\$APP\/((?:cli|server|bin)\/[A-Za-z0-9._-]+)/)![1];
-    expect(packaging).toContain(target.startsWith('bin/') ? target.slice(4) : target.startsWith('server/') ? `'${target.slice(7)}'` : `'${target}'`);
+    const target = read(`deploy/${launcher}`).match(/\$APP\/((?:cli|server|bin|manager)\/[A-Za-z0-9._-]+)/)![1];
+    // Copied either by destination path ('cli/verify.js', 'bin/servermin-update.mjs') or by name from a list ('server.js').
+    expect(packaging.includes(`'${target}'`) || packaging.includes(`'${target.split('/')[1]}'`), target).toBe(true);
   });
 
   it('ships the unit the installer installs, and the unit starts a launcher that is shipped', () => {

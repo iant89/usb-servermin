@@ -50,15 +50,17 @@ function release(arch, runtimeDir) {
   mkdirSync(join(out, 'server'));
   for (const f of ['server.js', 'server.js.map', 'module-host.js', 'module-host.js.map', 'storage-host.js', 'storage-host.js.map']) copy(`packages/core/dist/${f}`, `server/${f}`);
   copy('packages/shell/dist', 'shell');
+  mkdirSync(join(out, 'manager'));
+  for (const f of ['manager.js', 'manager.js.map']) copy(`packages/manager/dist/${f}`, `manager/${f}`);
   mkdirSync(join(out, 'cli'));
   copy('packages/cli/dist/serverctl.js', 'cli/serverctl.js');
   copy('packages/cli/dist/verify.js', 'cli/verify.js');
   copy('packages/cli/dist/servermin-agent.js', 'cli/servermin-agent.js');
   mkdirSync(join(out, 'bin'));
-  for (const f of ['server-control', 'servermin-agent', 'serverctl', 'servermin-verify', 'servermin-update', 'node-launcher.sh']) copy(`deploy/${f}`, `bin/${f}`);
+  for (const f of ['server-control', 'servermin-manager', 'servermin-agent', 'serverctl', 'servermin-verify', 'servermin-update', 'node-launcher.sh']) copy(`deploy/${f}`, `bin/${f}`);
   copy('deploy/servermin-update.mjs', 'bin/servermin-update.mjs');
   mkdirSync(join(out, 'deploy'));
-  for (const f of ['server-control.service', 'sudoers', 'servermin-privileged', 'config.json']) copy(`deploy/${f}`, `deploy/${f}`);
+  for (const f of ['server-control.service', 'servermin-manager.service', 'sudoers', 'servermin-privileged', 'config.json']) copy(`deploy/${f}`, `deploy/${f}`);
   copy('deploy/install.sh', 'install.sh');
   // The key servers use to verify updates. A release without it cannot update itself.
   if (existsSync(join(root, 'deploy/release-signing.pub'))) copy('deploy/release-signing.pub', 'release-signing.pub');

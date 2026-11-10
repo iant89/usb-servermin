@@ -186,7 +186,7 @@ describe('servermin-update', () => {
     expect(readFileSync(join(unitDir(), 'server-control.service'), 'utf8')).toContain('# from 1.0.0');
     expect(lstatSync(join(unitDir(), 'servermin-agent.service'), { throwIfNoEntry: false })).toBeUndefined();
     // "disable servermin-agent.service" on an alias would disable the server itself.
-    expect(sinceLastStop()).toEqual(['stop servermin-agent.service server-control.service', 'daemon-reload', 'enable server-control.service', 'start server-control.service']);
+    expect(sinceLastStop()).toEqual(['stop servermin-agent.service server-control.service', 'daemon-reload', 'enable server-control.service', 'start server-control.service', 'try-restart servermin-manager.service']);
   });
 
   it('rolling back from a release that renamed the unit file removes and disables the renamed unit', async () => {
@@ -202,7 +202,7 @@ describe('servermin-update', () => {
     expect(existsSync(join(unitDir(), 'servermin-agent.service'))).toBe(false);
     expect(lstatSync(join(unitDir(), 'server-control.service')).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(unitDir(), 'server-control.service'), 'utf8')).toContain('# from 1.0.0');
-    expect(sinceLastStop()).toEqual(['stop servermin-agent.service server-control.service', 'disable servermin-agent.service', 'daemon-reload', 'enable server-control.service', 'start server-control.service']);
+    expect(sinceLastStop()).toEqual(['stop servermin-agent.service server-control.service', 'disable servermin-agent.service', 'daemon-reload', 'enable server-control.service', 'start server-control.service', 'try-restart servermin-manager.service']);
   });
 
   it('rolling back to a release that ships the renamed unit file installs that one and retires the old file', async () => {
@@ -217,6 +217,6 @@ describe('servermin-update', () => {
     expect((await run('rollback')).code).toBe(0);
     expect(readFileSync(join(unitDir(), 'servermin-agent.service'), 'utf8')).toContain('# renamed');
     expect(existsSync(join(unitDir(), 'server-control.service'))).toBe(false);
-    expect(sinceLastStop()).toEqual(['stop servermin-agent.service server-control.service', 'disable server-control.service', 'daemon-reload', 'enable servermin-agent.service', 'start servermin-agent.service']);
+    expect(sinceLastStop()).toEqual(['stop servermin-agent.service server-control.service', 'disable server-control.service', 'daemon-reload', 'enable servermin-agent.service', 'start servermin-agent.service', 'try-restart servermin-manager.service']);
   });
 });

@@ -38,12 +38,13 @@ a second way to be reached.
 ## 3. The Manager is a new process that reuses core building blocks (ADR-001)
 
 New workspace `packages/manager` with its own entry point, unit (`servermin-manager.service`),
-configuration (`/etc/servermin/manager.json`) and database (`manager.db`). It reuses from
+account (`servermin-manager`), configuration (`/etc/servermin-manager/config.json`) and database
+(`/var/lib/servermin-manager/manager.db`). Implemented in Phase 2; see [manager.md](../manager.md). It reuses from
 `@servermin/core`: `Database` and migrations, `AuthService`, `AuditLog`, `EventBus`, `LogService`,
 `NotificationService`, the HTTP server, router and WebSocket gateway.
 
-- Prerequisite refactor: `HttpServer` and `WebSocketGateway` take a narrow host interface instead of
-  the concrete `Platform`. Behaviour stays identical and the existing tests must pass unchanged.
+- `HttpServer` and `WebSocketGateway` take narrow host interfaces (`HttpHost`, `GatewayHost`)
+  instead of the concrete `Platform`.
 - The Manager holds **no** sudo rule, no privilege helper and runs no modules on its own behalf.
 - A server can run both Manager and Agent; the Manager then manages its own host through the local
   agent like any other server.
