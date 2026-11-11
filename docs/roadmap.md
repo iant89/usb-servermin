@@ -49,7 +49,7 @@ reviewed and documented — nothing less).
 | 1 | Agent foundation | [x] | Agent starts automatically and reports server id, agent id, hostname, OS, version, capabilities |
 | 2 | Manager foundation | [x] | Manager starts independently and keeps a persistent server inventory |
 | 3 | Agent/Manager protocol | [x] | Agent disconnects and reconnects without manual intervention |
-| 4 | Server registration | [ ] | Code → install → `servermin-agent register CODE` → approve → managed |
+| 4 | Server registration | [x] | Code → install → `servermin-agent register CODE` → approve → managed |
 | 5 | Server inventory | [ ] | Manager accurately reflects server state |
 | 6 | Hardware discovery | [ ] | A newly registered server populates its hardware profile automatically |
 | 7 | Metrics | [ ] | Manager displays live resource utilisation |
@@ -138,11 +138,17 @@ Implemented messages: `HELLO`, `AUTHENTICATION`, `AUTHENTICATED`, `ERROR`, `HEAR
 `SERVER_STATE`, `CAPABILITIES`. Reserved and refused as unsupported until their phases: `METRIC`,
 `EVENT`, `COMMAND`, `COMMAND_RESULT`, `LOG`, `MODULE_STATE`.
 
-### Phase 4 — Server registration `[ ]`
+### Phase 4 — Server registration `[x]`
 
-- [ ] Registration codes, expiry, one-time use
-- [ ] Server identity, certificate identity
-- [ ] Approval, registration audit
+- [x] Registration codes, expiry, one-time use — hashed, revocable, optionally bound to a server or
+      self-approving; address lockout after ten wrong codes (ADR-004)
+- [x] Server identity, certificate identity — the agent's ids and public key; the Manager's
+      certificate pinned before the code is sent; an unbound code never takes over a server
+- [x] Approval, registration audit — pending / approved / rejected / superseded; every step audited
+- [x] `servermin-agent register` and `leave`; the agent picks the registration up without a restart
+
+Not verified on a real installation: `register` run with sudo against an installed Manager.
+It was run as the built program against a real Manager and agent in the tests.
 
 ### Phase 5 — Server inventory `[ ]`
 

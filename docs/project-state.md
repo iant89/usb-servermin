@@ -7,7 +7,7 @@ Last updated: 2026-11-11
 
 ## Current phase
 
-Phase 4 — Server registration (not started).
+Phase 5 — Server inventory (not started).
 
 ## Completed phases
 
@@ -15,6 +15,7 @@ Phase 4 — Server registration (not started).
 - Phase 1 — Agent foundation (2026-11-10)
 - Phase 2 — Manager foundation (2026-11-10)
 - Phase 3 — Agent/Manager protocol (2026-11-11)
+- Phase 4 — Server registration (2026-11-11)
 
 ## Active work
 
@@ -38,6 +39,10 @@ Nothing.
 - [ADR-002](adr/ADR-002-agent-outbound-connection.md) (Accepted): agents dial out over a WebSocket;
   TLS with a pinned fingerprint by default; Ed25519 challenge-response bound to the certificate;
   server state derived from the connection.
+- [ADR-004](adr/ADR-004-server-registration.md) (Accepted): one-time hashed codes, optionally bound
+  to a server or self-approving; `servermin-agent register` posts ids and public key over a pinned
+  connection and writes `<stateDir>/manager.json`, which the agent polls; an unbound code always
+  creates a new server.
 - [ADR-003](adr/ADR-003-server-identity.md) (Accepted): two random UUIDs (agent id, server id)
   stored with the data; hostname, machine id and hardware are attributes; ids are not secrets.
 - Phase 1, unit naming: alias instead of rename, because the installed release's updater performs
@@ -45,6 +50,18 @@ Nothing.
 - Phase 1, capabilities: a flat, derived list of module ids and provided services from modules
   that are `ACTIVE` and not `ERROR`/`OFFLINE`; manifest `capabilities` tags are reported per module
   as `tags` and left for Phase 9 to formalise.
+
+## What Phase 4 added
+
+- Manager: `registrations.ts` (migration 3: `registration_codes`, `registrations`),
+  `POST|GET /registration-codes`, `DELETE /registration-codes/:id`, public `POST /registrations`,
+  `GET /registrations[?status=]`, `GET /registrations/:id`, `POST /registrations/:id/approve|reject`.
+- Core: `validateManagerSettings`, `readRegisteredManager`; the platform builds its link from
+  `agent.manager` or `<stateDir>/manager.json` and replaces it when the file changes; `source` in
+  the link status.
+- CLI: `servermin-agent register`, `servermin-agent leave` (`packages/cli/src/register.ts`);
+  status from disk shows a registered Manager.
+- Known issue 16 is resolved.
 
 ## What Phase 3 added
 
@@ -116,9 +133,8 @@ From Phase 2:
 
 From Phase 3:
 
-16. `agent.manager` lives in the root-owned `/etc/servermin/config.json` and needs a restart to
-    change. `servermin-agent register` (Phase 4) needs a place the agent can be told at runtime;
-    together with issue 8 this is the first design question of Phase 4.
+16. ~~`agent.manager` needs a root-owned file and a restart.~~ Resolved in Phase 4: `register`
+    writes `<stateDir>/manager.json`, which the agent picks up within 2 s.
 17. A reverse proxy that terminates TLS in front of the Manager breaks the certificate binding of
     agent authentication. Not supported.
 18. Replacing the Manager's certificate means touching every agent. No rotation mechanism yet
@@ -127,6 +143,14 @@ From Phase 3:
 20. The Manager's connection events (`agent.connected`, `agent.disconnected`) are only logged and
     put on the in-memory bus; a persistent event store is Phase 20.
 21. `servermin-verify` checks neither the Manager nor the agent's link to one.
+
+From Phase 4:
+
+22. The URL in the printed registration command comes from the `Host` header the administrator
+    used; behind NAT it may not be what agents can reach.
+23. Registrations and used codes are kept forever; nothing prunes them.
+24. A registration does not expire while pending; a rejected or superseded agent keeps retrying
+    every 30 s until someone runs `servermin-agent leave` on it.
 
 ## Technical debt
 
@@ -143,6 +167,19 @@ From Phase 3:
 
 ## Test status
 
+2026-11-11, end of Phase 4: `npm run typecheck` clean, `npm run build` clean, `npm test`
+36 files / 400 tests passing (Node.js 22.23.4). Added `tests/integration/registration.test.ts`
+(13 tests, three consecutive passing runs): the code format, hashing and permissions; reuse, expiry,
+revocation, malformed requests that do not use a code up, and address lockout; the full flow with
+the built `servermin-agent` program against a real Manager over TLS and a real agent that picks up
+the registration without a restart; codes that approve themselves; a reinstall through a code
+bound to the server (new key, same server, server id adopted); an unbound code never attaching to
+an existing server; rejection; a wrong fingerprint sending nothing; an untrusted certificate
+explained; trusting a CA file; `leave`; refusals before any network access; and an unusable
+registration file. The test helper's HTTPS client trusts the test certificate instead of
+switching verification off.
+
+End of Phase 3 (kept for reference):
 2026-11-11, end of Phase 3: `npm run typecheck` clean, `npm run build` clean, `npm test`
 35 files / 387 tests passing (Node.js 22.23.4); the protocol tests were run repeatedly to look for
 timing-dependent failures (one found and fixed in the Manager's close handling). Added:
@@ -164,14 +201,16 @@ Still not exercised: anything under a running systemd.
 
 ## Next phase
 
-Phase 4 — Server registration. Enrolment by hand already works; Phase 4 replaces the copying:
+Phase 5 — Server inventory: list, detail, metadata, OS, agent version, IP, last seen, uptime and
+hardware, and the full set of states. Plan:
 
-1. Decide how a root CLI talks to the running agent (issues 8 and 16): the candidate is a Unix
-   socket in the agent's state directory, authorised by file permissions.
-2. Registration codes in the Manager: one-time, expiring, stored hashed, carrying or accompanied
-   by the Manager's URL and certificate fingerprint.
-3. `sudo servermin-agent register CODE`: the agent presents the code with its ids and public key
-   over a connection that is trusted by the fingerprint; the Manager creates a pending server.
-4. Approval in the Manager, then the agent connects as in Phase 3. Audit of every step.
-5. Tests: reuse, expiry, wrong code rate limiting, a code used against another Manager, approval
-   refused, and the unchanged Phase 3 properties for a server enrolled this way.
+1. Decide what the agent reports and when: extend `SERVER_STATE` (OS details, uptime, address the
+   Manager saw) rather than add message types; hardware waits for Phase 6's profile.
+2. Store the latest report per server (one row, replaced), not a history: history is metrics and
+   events (Phases 7 and 20).
+3. States beyond ONLINE / DEGRADED / STALE / OFFLINE / UNKNOWN that Phase 5 can derive honestly
+   (`CONNECTING` while a handshake is in progress, `ERROR` for an agent that reports ERROR), and
+   leave the rest (`WAKING`, `UPDATING`, …) to the phases that cause them.
+4. `GET /servers` filters and sorting; `last_seen_at` writes reduced (known issue 19).
+5. Tests: a report changes the inventory; a stale report never overwrites a newer one; a server
+   that goes away keeps its last known facts, marked as such.

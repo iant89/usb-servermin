@@ -88,6 +88,13 @@ with the same rules, as on an agent (`auth/*`, `users`, `audit`); see [security.
 | `DELETE servers/:id` | `servers.manage` | Also disconnects its agent |
 | `PUT servers/:id/agent` | `servers.manage` | `{ agentId, publicKey }`: allow this agent to connect as the server (replaces a previous one) |
 | `DELETE servers/:id/agent` | `servers.manage` | Revoke the agent: its connection is closed at once and it cannot return |
+| `POST registration-codes` | `servers.manage` | `{ serverId?, name?, expiresInMinutes? (60), autoApprove? }` → the code (shown once) and the command to run |
+| `GET registration-codes` | `servers.manage` | All codes with their status (`ACTIVE`, `USED`, `EXPIRED`, `REVOKED`); never the code itself |
+| `DELETE registration-codes/:id` | `servers.manage` | Revoke an unused code |
+| `POST registrations` | public | Used by `servermin-agent register`: `{ code, agentId, serverId, publicKey, hostname, name?, agentVersion? }` |
+| `GET registrations[?status=pending]` | `servers.read` | Registrations, newest first |
+| `POST registrations/:id/approve` | `servers.manage` | `{ name? }`: enrol the agent (a new server, or the code's server) |
+| `POST registrations/:id/reject` | `servers.manage` | `{ reason? }` |
 
 A server:
 
@@ -121,6 +128,31 @@ which takes a few seconds.
   `server.update`, `server.remove`).
 
 Presets: Administrator (`*`), Operator (`servers.read`, `servers.manage`), Viewer (`servers.read`).
+
+## Registering a server
+
+The usual way to add a server ([ADR-004](adr/ADR-004-server-registration.md)):
+
+1. Create a code in the Manager. It is shown once, with the command to run:
+
+   ```bash
+   curl --cacert /etc/servermin-manager/tls.crt -b cookies -H 'X-Servermin-Request: 1' -H 'Content-Type: application/json' \
+     -d '{"name":"Saturn"}' https://manager:8480/api/v1/registration-codes
+   # → { "code": "SMR-…", "command": "servermin-agent register SMR-… --manager https://manager:8480 --fingerprint …", "runAs": "root", … }
+   ```
+
+   Add `"serverId"` to re-register a reinstalled server under its existing entry, and
+   `"autoApprove": true` to skip step 3 (for automated provisioning; anyone holding the code can
+   then add a server).
+2. On the new server, with the agent installed and running, run the command with sudo. The agent
+   picks the registration up by itself; nothing is restarted.
+3. Approve it: `GET /api/v1/registrations?status=pending`, then
+   `POST /api/v1/registrations/<id>/approve` (optionally `{ "name": … }`). The agent is connected
+   within 30 seconds.
+
+`sudo servermin-agent leave` on a server makes it standalone again; the Manager keeps the server
+until you remove it or revoke its agent. Ten wrong codes from one address in 15 minutes lock that
+address out of registering for 15 minutes.
 
 ## Connecting an agent
 
