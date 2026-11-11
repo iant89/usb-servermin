@@ -11,7 +11,7 @@ import { AGENT_ENDPOINT, CLOSE, MAX_FRAME_BYTES, authSigningInput, createMessage
 import { ROOT, fixture, startServer, waitFor, type TestServer } from './helpers';
 import { startManager, type TestManager } from './manager-helpers';
 
-const FAST = { agents: { heartbeatSeconds: 0.2, timeoutSeconds: 1, handshakeSeconds: 1 } };
+const FAST = { agents: { heartbeatSeconds: 0.2, timeoutSeconds: 1, handshakeSeconds: 1, duplicateProbeSeconds: 0.3 } };
 const QUICK = { minMs: 40, maxMs: 200, stableMs: 300, refusedScale: 0.005 };
 
 let m: TestManager | undefined;
@@ -335,15 +335,92 @@ describe('manager agent endpoint', () => {
     expect((await c.closed).code).toBe(CLOSE.rateLimited);
   });
 
-  it('keeps one connection per agent: a second one replaces the first and the server stays online', async () => {
+  it('keeps one connection per agent: a second one is refused while the first still answers', async () => {
+    m = await startManager({ config: FAST });
+    const events: any[] = [];
+    m.manager.bus.subscribe('agent.duplicate', (e) => events.push(e.payload), 'test');
+    const first = await authenticated(m);
+    // A clone: same identity, same key, and the first connection is alive (it answers pings).
+    for (let i = 0; i < 3; i++) {
+      const clone = await raw(wsUrl(m));
+      clone.ws.send(encode(first.auth(await clone.next('HELLO'))));
+      expect((await clone.closed).code).toBe(CLOSE.duplicate);
+      expect((clone.messages.find((x) => x.type === 'ERROR')!.payload as any).code).toBe('duplicate');
+      expect(clone.messages.some((x) => x.type === 'AUTHENTICATED')).toBe(false);
+    }
+    // The original was never knocked off.
+    expect(first.c.ws.readyState).toBe(WebSocket.OPEN);
+    first.c.ws.send(encode(createMessage('HEARTBEAT', { seq: 1 })));
+    await first.c.next('HEARTBEAT');
+    expect((await server(m, first.serverId)).state).toBe('ONLINE');
+    expect((await m.api('GET', '/api/v1/manager')).body.agents.authenticated).toBe(1);
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({ agentId: first.agentId, serverId: first.serverId });
+    const audit = (await m.api('GET', '/api/v1/audit?action=agent.duplicate')).body;
+    expect(audit).toHaveLength(3);
+    expect(audit[0]).toMatchObject({ result: 'failure', target: first.agentId });
+    // Refused clones are not authentication failures: the address is not locked out.
+    expect((await m.api('GET', '/api/v1/audit?action=agent.authenticate')).body).toEqual([]);
+  });
+
+  it('replaces a connection that no longer answers (the agent reconnected after a network change)', async () => {
     m = await startManager({ config: FAST });
     const first = await authenticated(m);
+    // The old connection stops reading, as a half-open TCP connection would: no pong comes back.
+    (first.c.ws as any)._socket.pause();
     const second = await raw(wsUrl(m));
     second.ws.send(encode(first.auth(await second.next('HELLO'))));
     await second.next('AUTHENTICATED');
-    expect((await first.c.closed).code).toBe(CLOSE.replaced);
     expect((await server(m, first.serverId)).state).toBe('ONLINE');
     expect((await m.api('GET', '/api/v1/manager')).body.agents.authenticated).toBe(1);
+    second.ws.send(encode(createMessage('HEARTBEAT', { seq: 1 })));
+    await second.next('HEARTBEAT');
+    expect((await m.api('GET', '/api/v1/audit?action=agent.duplicate')).body).toEqual([]);
+  });
+
+  it('closes a connection that sends anything while its duplicate check runs', async () => {
+    m = await startManager({ config: { agents: { ...FAST.agents, duplicateProbeSeconds: 1 } } });
+    const first = await authenticated(m);
+    (first.c.ws as any)._socket.pause();
+    const second = await raw(wsUrl(m));
+    second.ws.send(encode(first.auth(await second.next('HELLO'))));
+    second.ws.send(encode(createMessage('HEARTBEAT', { seq: 1 })));
+    expect((await second.closed).code).toBe(CLOSE.unauthorized);
+    expect(second.messages.some((x) => x.type === 'AUTHENTICATED')).toBe(false);
+  });
+
+  it('locks out an address after repeated failed handshakes, but not for agents that are only waiting to be enrolled', async () => {
+    m = await startManager({ config: FAST });
+    const e = enrolKey(m, 'Saturn');
+    // An agent that nobody has enrolled yet retries for as long as it takes: never a lockout.
+    for (let i = 0; i < 12; i++) {
+      const c = await raw(wsUrl(m));
+      c.ws.send(encode(e.auth(await c.next('HELLO'), { agentId: crypto.randomUUID() })));
+      expect((await c.closed).code).toBe(CLOSE.unauthorized);
+    }
+    // Wrong signatures, garbage and silence do count.
+    const stranger = generateKeyPairSync('ed25519').privateKey;
+    for (let i = 0; i < 10; i++) {
+      const c = await raw(wsUrl(m));
+      const hello = await c.next('HELLO');
+      if (i % 2) c.ws.send('garbage');
+      else c.ws.send(encode(e.auth(hello, { signature: sign(null, Buffer.from('x'), stranger).toString('base64') })));
+      await c.closed;
+    }
+    await expect(raw(wsUrl(m))).rejects.toThrow('HTTP 429');
+    // Even the enrolled agent, from that address, waits out the lockout.
+    await expect(raw(wsUrl(m))).rejects.toThrow('HTTP 429');
+  });
+
+  it('lets no single address hold more than 16 unauthenticated connections', async () => {
+    m = await startManager({ config: { agents: { ...FAST.agents, handshakeSeconds: 5 } } });
+    const held: Raw[] = [];
+    for (let i = 0; i < 16; i++) held.push(await raw(wsUrl(m)));
+    await expect(raw(wsUrl(m))).rejects.toThrow('HTTP 503');
+    held[0].ws.close();
+    await held[0].closed;
+    await waitFor(() => m!.manager.agents.connections().pending, (n) => n === 15);
+    await raw(wsUrl(m));
   });
 
   it('starts every server OFFLINE or UNKNOWN after a restart, never ONLINE from memory', async () => {

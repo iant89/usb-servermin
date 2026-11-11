@@ -44,7 +44,7 @@ export const MESSAGE_TYPES = [
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 export const RESERVED_TYPES: readonly MessageType[] = ['METRIC', 'EVENT', 'COMMAND', 'COMMAND_RESULT', 'LOG', 'MODULE_STATE'];
 
-export const ERROR_CODES = ['malformed', 'unsupported', 'unauthorized', 'protocol-version', 'timeout', 'rate-limited', 'replaced', 'revoked', 'shutting-down', 'internal'] as const;
+export const ERROR_CODES = ['malformed', 'unsupported', 'unauthorized', 'protocol-version', 'timeout', 'rate-limited', 'replaced', 'duplicate', 'revoked', 'shutting-down', 'internal'] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 /** WebSocket close codes (4000-4999 are for applications). */
@@ -53,6 +53,8 @@ export const CLOSE = {
   unauthorized: 4401,
   timeout: 4408,
   replaced: 4409,
+  /** Another connection for this agent is live and answers: two installations share one identity. */
+  duplicate: 4410,
   revoked: 4403,
   protocolVersion: 4426,
   rateLimited: 4429,

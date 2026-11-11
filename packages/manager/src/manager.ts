@@ -107,6 +107,7 @@ export class Manager {
       heartbeatMs: Math.round(this.config.agents.heartbeatSeconds * 1000),
       timeoutMs: Math.round(this.config.agents.timeoutSeconds * 1000),
       handshakeMs: Math.round(this.config.agents.handshakeSeconds * 1000),
+      duplicateProbeMs: Math.round(this.config.agents.duplicateProbeSeconds * 1000),
       tlsFingerprint: this.tlsFingerprint,
       clientIp: (req) => (this.config.http.trustProxy && typeof req.headers['x-forwarded-for'] === 'string' ? req.headers['x-forwarded-for'].split(',')[0].trim() : (req.socket.remoteAddress ?? 'unknown')),
     });

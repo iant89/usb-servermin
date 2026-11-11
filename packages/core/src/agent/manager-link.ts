@@ -51,6 +51,7 @@ const SLOW_RETRY_MS: Record<number, number> = {
   [CLOSE.unauthorized]: 30_000, // not enrolled (yet): a person has to act
   [CLOSE.revoked]: 60_000,
   [CLOSE.replaced]: 60_000, // another agent with our identity is connected
+  [CLOSE.duplicate]: 60_000, // refused: another live installation has our identity (a cloned disk?)
   [CLOSE.protocolVersion]: 300_000, // one side needs an update
 };
 
