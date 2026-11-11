@@ -44,7 +44,7 @@ Every setting has a default; the file is only needed to change one.
   "paths": { "data": "/var/lib/servermin-manager" },
   "logging": { "level": "INFO" },
   "auth": { "sessionHours": 12, "loginAttempts": 5, "lockoutMinutes": 15 },
-  "agents": { "heartbeatSeconds": 15, "timeoutSeconds": 60, "handshakeSeconds": 10 }
+  "agents": { "heartbeatSeconds": 15, "timeoutSeconds": 60, "handshakeSeconds": 10, "duplicateProbeSeconds": 5 }
 }
 ```
 
@@ -188,6 +188,10 @@ One channel so far:
   open themselves. The Manager stores public keys only: its database cannot be used to
   impersonate an agent, and it holds nothing that works as a login on a server. The agent endpoint
   refuses browsers, rate-limits connections, and answers every failed authentication identically.
+  An address with ten failed handshakes in 10 minutes is locked out for 15 minutes; an agent that
+  is only waiting to be enrolled never causes that. A second live installation with the same
+  identity (a cloned disk) is refused and audited as `agent.duplicate`, and the original stays
+  connected: see `GET /api/v1/audit?action=agent.duplicate`.
 - **A reverse proxy that terminates TLS is not supported for agent connections yet**: agents bind
   their proof to the certificate they see, which would be the proxy's.
 

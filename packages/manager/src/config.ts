@@ -21,6 +21,12 @@ export interface ManagerConfig {
     timeoutSeconds: number;
     /** How long a new connection has to authenticate. */
     handshakeSeconds: number;
+    /**
+     * When a second connection authenticates as an agent that is already connected, how long the
+     * existing connection has to answer a ping. If it answers, the newcomer is refused (two
+     * installations share one identity); if not, it was a dead connection and is replaced.
+     */
+    duplicateProbeSeconds: number;
   };
   dev: boolean;
 }
@@ -35,7 +41,7 @@ export function defaultManagerConfig(base = '/'): ManagerConfig {
     paths: { data: join(base, 'var/lib/servermin-manager') },
     logging: { level: 'INFO', stdout: true },
     auth: { sessionHours: 12, secureCookies: 'auto', loginAttempts: 5, lockoutMinutes: 15 },
-    agents: { heartbeatSeconds: 15, timeoutSeconds: 60, handshakeSeconds: 10 },
+    agents: { heartbeatSeconds: 15, timeoutSeconds: 60, handshakeSeconds: 10, duplicateProbeSeconds: 5 },
     dev: false,
   };
 }
@@ -52,6 +58,7 @@ export function validateManagerConfig(config: ManagerConfig): ManagerConfig {
   if (!(Number(config.agents.heartbeatSeconds) >= 0.1 && Number(config.agents.heartbeatSeconds) <= 3600)) problems.push('agents.heartbeatSeconds must be between 0.1 and 3600');
   else if (!(Number(config.agents.timeoutSeconds) >= 2 * config.agents.heartbeatSeconds && Number(config.agents.timeoutSeconds) <= 86400)) problems.push('agents.timeoutSeconds must be at least twice agents.heartbeatSeconds');
   if (!(Number(config.agents.handshakeSeconds) >= 0.1 && Number(config.agents.handshakeSeconds) <= 120)) problems.push('agents.handshakeSeconds must be between 0.1 and 120');
+  if (!(Number(config.agents.duplicateProbeSeconds) >= 0.05 && Number(config.agents.duplicateProbeSeconds) <= 60)) problems.push('agents.duplicateProbeSeconds must be between 0.05 and 60');
   if (problems.length) throw new Error(`Invalid Manager configuration:\n  ${problems.join('\n  ')}`);
   return config;
 }

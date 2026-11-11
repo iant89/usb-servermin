@@ -3,12 +3,18 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Logger } from '@servermin/sdk';
-import { CORE_VERSION, TokenBucket, verifyAgentSignature, type AuditLog, type EventBus } from '@servermin/core';
+import { AttemptLimiter, CORE_VERSION, TokenBucket, verifyAgentSignature, type AuditLog, type EventBus } from '@servermin/core';
 import { AGENT_ENDPOINT, CLOSE, MAX_FRAME_BYTES, PROTOCOL_VERSIONS, ProtocolError, authSigningInput, createMessage, decode, encode, type ErrorCode, type Message, type Payloads } from '@servermin/protocol';
 import type { Inventory, ServerState } from './inventory';
 
 /** Connections that have not authenticated yet. Each holds a socket and a timer, nothing else. */
 const MAX_PENDING = 200;
+/** Unauthenticated connections from one address, so one address cannot take all of MAX_PENDING. */
+const MAX_PENDING_PER_ADDRESS = 16;
+/** Failed handshakes from one address within the window that lock it out. */
+const LOCKOUT_FAILURES = 10;
+const LOCKOUT_WINDOW_MS = 10 * 60_000;
+const LOCKOUT_MS = 15 * 60_000;
 const MAX_MESSAGES_PER_10S = 300;
 
 interface Connection {
@@ -23,6 +29,8 @@ interface Connection {
   lastHeard: number;
   stale: boolean;
   handshake: NodeJS.Timeout | null;
+  /** Signature verified; waiting to learn whether an existing connection for the agent is still alive. */
+  authenticating: boolean;
   windowStart: number;
   messages: number;
 }
@@ -35,6 +43,8 @@ export interface AgentHubOptions {
   heartbeatMs: number;
   timeoutMs: number;
   handshakeMs: number;
+  /** How long an existing connection has to answer a ping when a second one claims its agent id. */
+  duplicateProbeMs: number;
   /** SHA-256 of the Manager's own certificate (lower-case hex), or '' without TLS. Agents sign it, which binds their proof to this Manager. */
   tlsFingerprint: string;
   clientIp(req: IncomingMessage): string;
@@ -51,7 +61,11 @@ export class AgentHub {
   private pending = new Set<Connection>();
   /** Authenticated connections by agent id. At most one per agent. */
   private agents = new Map<string, Connection>();
+  /** Connections waiting for the duplicate probe, by agent id. */
+  private probing = new Map<string, Connection>();
   private upgrades = new TokenBucket(30, 2);
+  /** Failed handshakes per address. A locked-out address is refused before the WebSocket upgrade. */
+  private failures = new AttemptLimiter(LOCKOUT_FAILURES, LOCKOUT_WINDOW_MS, LOCKOUT_MS);
   private sweeper: NodeJS.Timeout;
   private closed = false;
 
@@ -78,16 +92,22 @@ export class AgentHub {
     if (this.closed) return refuse(503, 'Service Unavailable');
     // Browsers always send Origin; agents never do. A page must not be able to open this endpoint.
     if (req.headers.origin) return refuse(403, 'Forbidden');
+    if (this.failures.isLocked(ip)) return refuse(429, 'Too Many Requests');
     if (!this.upgrades.take(ip)) return refuse(429, 'Too Many Requests');
-    if (this.pending.size >= MAX_PENDING) return refuse(503, 'Service Unavailable');
+    let fromIp = 0;
+    for (const p of this.pending) if (p.ip === ip) fromIp++;
+    if (this.pending.size >= MAX_PENDING || fromIp >= MAX_PENDING_PER_ADDRESS) return refuse(503, 'Service Unavailable');
     this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, ip));
     return true;
   }
 
   private accept(ws: WebSocket, ip: string) {
-    const c: Connection = { ws, ip, nonce: randomBytes(32).toString('base64'), version: null, health: null, lastHeard: Date.now(), stale: false, handshake: null, windowStart: Date.now(), messages: 0 };
+    const c: Connection = { ws, ip, nonce: randomBytes(32).toString('base64'), version: null, health: null, lastHeard: Date.now(), stale: false, handshake: null, authenticating: false, windowStart: Date.now(), messages: 0 };
     this.pending.add(c);
-    c.handshake = setTimeout(() => this.end(c, CLOSE.timeout, 'timeout', 'Authentication timed out'), this.o.handshakeMs);
+    c.handshake = setTimeout(() => {
+      this.failures.fail(ip);
+      this.end(c, CLOSE.timeout, 'timeout', 'Authentication timed out');
+    }, this.o.handshakeMs);
     ws.on('message', (raw, isBinary) => this.onFrame(c, raw as Buffer, isBinary));
     ws.on('close', () => this.onClose(c));
     ws.on('error', () => undefined); // 'close' follows
@@ -100,7 +120,12 @@ export class AgentHub {
     const now = Date.now();
     if (now - c.windowStart > 10_000) (c.windowStart = now), (c.messages = 0);
     if (++c.messages > MAX_MESSAGES_PER_10S) return this.end(c, CLOSE.rateLimited, 'rate-limited', 'Too many messages');
-    if (isBinary) return this.end(c, CLOSE.malformed, 'malformed', 'Binary frames are not part of the protocol');
+    // The agent waits for AUTHENTICATED; anything sent meanwhile is out of order.
+    if (c.authenticating) return this.end(c, CLOSE.unauthorized, 'unauthorized', 'Message before authentication finished');
+    if (isBinary) {
+      if (!c.agentId) this.failures.fail(c.ip);
+      return this.end(c, CLOSE.malformed, 'malformed', 'Binary frames are not part of the protocol');
+    }
     let m: Message;
     try {
       m = decode(raw);
@@ -109,6 +134,7 @@ export class AgentHub {
       // Before authentication nothing is tolerated. Afterwards an unknown type is answered and
       // skipped (an agent newer than this Manager); a malformed frame ends the connection.
       if (code === 'unsupported' && c.agentId) return this.send(c, createMessage('ERROR', { code: 'unsupported', message: (e as Error).message }, undefined, c.version ?? undefined));
+      if (!c.agentId) this.failures.fail(c.ip);
       return this.end(c, c.agentId ? CLOSE.malformed : CLOSE.unauthorized, c.agentId ? 'malformed' : 'unauthorized', c.agentId ? (e as Error).message : 'Authentication required');
     }
     try {
@@ -124,7 +150,11 @@ export class AgentHub {
 
   private authenticate(c: Connection, m: Message) {
     // One generic answer for every failure: a caller learns nothing about which agents exist.
-    const deny = (reason: string, agentId?: string) => {
+    // Every failure counts towards the address lockout except an agent that is not enrolled yet:
+    // that is the normal state of a new server until someone enrols it, and it retries every 30 s,
+    // which would otherwise lock out every agent behind the same NAT address.
+    const deny = (reason: string, agentId?: string, counts = true) => {
+      if (counts) this.failures.fail(c.ip);
       this.o.audit.record({ action: 'agent.authenticate', target: agentId, result: 'failure', ip: c.ip, metadata: { reason } });
       this.o.logger.warn(`Agent authentication failed: ${reason}`, { ip: c.ip, agentId });
       this.end(c, CLOSE.unauthorized, 'unauthorized', 'Not authorized');
@@ -138,34 +168,78 @@ export class AgentHub {
     const credential = this.o.inventory.agentCredential(p.agentId);
     // Verify against the claimed server id: the signature covers what the agent believes it is.
     const signed = authSigningInput({ nonce: c.nonce, agentId: p.agentId, serverId: p.serverId, version: p.version, tlsFingerprint: this.o.tlsFingerprint });
-    if (!credential) return deny('agent is not enrolled', p.agentId);
+    if (!credential) return deny('agent is not enrolled', p.agentId, false);
     if (!verifyAgentSignature(credential.publicKey, signed, p.signature)) return deny('signature does not match the enrolled key', p.agentId);
 
     if (c.handshake) clearTimeout(c.handshake);
     c.handshake = null;
     this.pending.delete(c);
     c.version = p.version;
-    c.agentId = p.agentId;
-    c.serverId = credential.serverId;
-    c.lastHeard = Date.now();
+    this.failures.succeed(c.ip);
 
     const previous = this.agents.get(p.agentId);
-    if (previous) {
-      // Usually our side of a connection the agent already lost. If the old one was heard from a
-      // moment ago, two machines are probably running with one identity (a cloned disk).
-      const alive = !previous.stale && Date.now() - previous.lastHeard < this.o.heartbeatMs * 1.5 && previous.ip !== c.ip;
-      if (alive) {
-        this.o.audit.record({ action: 'agent.duplicate', target: p.agentId, result: 'failure', ip: c.ip, metadata: { serverId: credential.serverId, previousIp: previous.ip, reason: 'two live connections with one agent identity' } });
-        this.o.logger.warn('A second agent connected with an identity that is already connected; a cloned installation?', { agentId: p.agentId, ip: c.ip, previousIp: previous.ip });
+    if (this.probing.has(p.agentId)) return this.refuseDuplicate(c, p.agentId, credential.serverId, previous ?? this.probing.get(p.agentId)!);
+    if (!previous) return this.admit(c, m, p.agentId, credential.serverId);
+    // Usually our side of a connection the agent already lost (it restarted, its network changed).
+    // If the old connection still answers, two machines are running with one identity (a cloned
+    // disk, a restored backup): the newcomer is refused, so the two do not knock each other off forever.
+    c.authenticating = true;
+    this.probing.set(p.agentId, c);
+    void this.answers(previous).then((alive) => {
+      this.probing.delete(p.agentId);
+      c.authenticating = false;
+      if (c.ws.readyState !== c.ws.OPEN) return;
+      if (alive && this.agents.get(p.agentId) === previous) return this.refuseDuplicate(c, p.agentId, credential.serverId, previous);
+      const current = this.agents.get(p.agentId);
+      if (current) {
+        this.o.logger.info('Replacing an agent connection that no longer answers', { agentId: p.agentId, ip: c.ip, previousIp: current.ip });
+        this.agents.delete(p.agentId); // so that closing it does not mark the server offline
+        this.end(current, CLOSE.replaced, 'replaced', 'Another connection authenticated as this agent');
       }
-      this.agents.delete(p.agentId); // so that closing it does not mark the server offline
-      this.end(previous, CLOSE.replaced, 'replaced', 'Another connection authenticated as this agent');
-    }
-    this.agents.set(p.agentId, c);
-    this.send(c, createMessage('AUTHENTICATED', { serverId: credential.serverId, heartbeatIntervalMs: this.o.heartbeatMs, heartbeatTimeoutMs: this.o.timeoutMs }, m.id, c.version));
-    this.o.inventory.setConnection(credential.serverId, { state: 'ONLINE', seen: true });
-    this.o.logger.info('Agent connected', { agentId: p.agentId, serverId: credential.serverId, ip: c.ip });
-    this.o.bus.publish('agent.connected', { agentId: p.agentId, serverId: credential.serverId, ip: c.ip }, 'manager');
+      this.admit(c, m, p.agentId, credential.serverId);
+    });
+  }
+
+  private admit(c: Connection, m: Message, agentId: string, serverId: string) {
+    c.agentId = agentId;
+    c.serverId = serverId;
+    c.lastHeard = Date.now();
+    this.agents.set(agentId, c);
+    this.send(c, createMessage('AUTHENTICATED', { serverId, heartbeatIntervalMs: this.o.heartbeatMs, heartbeatTimeoutMs: this.o.timeoutMs }, m.id, c.version!));
+    this.o.inventory.setConnection(serverId, { state: 'ONLINE', seen: true });
+    this.o.logger.info('Agent connected', { agentId, serverId, ip: c.ip });
+    this.o.bus.publish('agent.connected', { agentId, serverId, ip: c.ip }, 'manager');
+  }
+
+  private refuseDuplicate(c: Connection, agentId: string, serverId: string, live: Connection) {
+    this.o.audit.record({ action: 'agent.duplicate', target: agentId, result: 'failure', ip: c.ip, metadata: { serverId, liveIp: live.ip, reason: 'two live connections with one agent identity' } });
+    this.o.logger.warn('Refused a second connection for an agent that is connected and answering: two installations share one identity (a cloned disk?)', { agentId, ip: c.ip, liveIp: live.ip });
+    this.o.bus.publish('agent.duplicate', { agentId, serverId, ip: c.ip, liveIp: live.ip }, 'manager');
+    this.end(c, CLOSE.duplicate, 'duplicate', 'Another connection for this agent is live');
+  }
+
+  /** Whether a connection answers a WebSocket ping within the probe time. */
+  private answers(c: Connection): Promise<boolean> {
+    const ws = c.ws;
+    if (ws.readyState !== ws.OPEN) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const done = (v: boolean) => {
+        clearTimeout(timer);
+        ws.off('pong', onPong);
+        ws.off('close', onClose);
+        resolve(v);
+      };
+      const onPong = () => done(true);
+      const onClose = () => done(false);
+      const timer = setTimeout(() => done(false), this.o.duplicateProbeMs);
+      ws.on('pong', onPong);
+      ws.on('close', onClose);
+      try {
+        ws.ping();
+      } catch {
+        done(false);
+      }
+    });
   }
 
   // ── Messages from an authenticated agent ───────────────────────────────────────
@@ -249,7 +323,7 @@ export class AgentHub {
   close() {
     this.closed = true;
     clearInterval(this.sweeper);
-    for (const c of [...this.pending, ...this.agents.values()]) {
+    for (const c of [...this.pending, ...this.probing.values(), ...this.agents.values()]) {
       if (c.handshake) clearTimeout(c.handshake);
       if (c.ws.readyState === c.ws.OPEN) {
         this.send(c, createMessage('ERROR', { code: 'shutting-down', message: 'The Manager is stopping' }, undefined, c.version ?? undefined));
@@ -258,6 +332,7 @@ export class AgentHub {
     }
     // Servers keep their last state in the database; the next start resets it (resetConnectionStates).
     this.pending.clear();
+    this.probing.clear();
     this.agents.clear();
     this.wss.close();
   }

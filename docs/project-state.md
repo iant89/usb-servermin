@@ -95,9 +95,10 @@ From Phase 1:
 8. `servermin-agent status` without API credentials cannot list capabilities and needs root. A
    local, credential-free channel to the running agent will be needed for
    `servermin-agent register` (Phase 4) and should replace this fallback.
-9. A cloned data directory duplicates the identity (and now the key). The Manager keeps one
-   connection per agent and audits a second live one from another address as a possible clone;
-   two clones behind one address take turns unnoticed.
+9. A cloned data directory duplicates the identity (and now the key). The Manager keeps the first
+   live connection and refuses the clone (audited as `agent.duplicate`, also behind one address).
+   The clone keeps retrying every 60 s and is refused each time; it shows `duplicate` in
+   `servermin-agent status`. Telling the two apart and re-identifying the clone is for Phase 4.
 10. If a 1.0.0 server rolls back from this release and is later upgraded again after a reboot, the
     state is consistent (verified), but the leftover `servermin-agent.service` link points at the
     1.0.0 unit until the next successful install recreates it. Harmless.
@@ -151,7 +152,8 @@ and `tests/integration/protocol.test.ts`: a real agent against a real Manager (e
 Manager restart, revoke, removal, server-id adoption, degraded state); raw clients against the
 Manager (wrong key, unknown agent, replayed signature, wrong server id, nothing before
 authentication, silent connection, version mismatch, browser, stalled heartbeats, malformed,
-binary, oversized, flood, duplicate); the agent link against misbehaving Managers (no answer, not
+binary, oversized, flood, a live duplicate refused, a half-open connection replaced, address
+lockout and its exemption for unenrolled agents, the per-address pending cap); the agent link against misbehaving Managers (no answer, not
 a Manager, rubbish, no common version, no heartbeat acknowledgements, connection cut mid-frame,
 accepted then dropped); TLS (pinned, wrong pin, untrusted, CA file, proof made for another
 certificate); and two real processes with `kill -9` in both directions. That last test takes

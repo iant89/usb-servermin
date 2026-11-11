@@ -55,15 +55,27 @@ server to `OFFLINE` (or `UNKNOWN` without an agent): state is never remembered, 
 
 **Reconnection.** Any failure, at any stage, on either side, ends in a retry: 1 s doubling to
 60 s, with jitter, reset only after a connection has lasted 30 s. After a refusal the agent waits
-longer (30 s when not authorized, 60 s when revoked or replaced, 5 min on a version mismatch),
+longer (30 s when not authorized, 60 s when revoked, replaced or refused as a duplicate, 5 min on a version mismatch),
 because a person has to act first. Nothing about the link can stop or slow the server itself.
 
-**One connection per agent.** A second connection that authenticates as the same agent replaces
-the first. If the first was demonstrably alive and came from another address, the Manager records
-a possible cloned installation.
+**One connection per agent.** When a second connection authenticates as an agent that is
+already connected, the Manager pings the existing connection (`agents.duplicateProbeSeconds`,
+5 s). If the existing connection answers, two installations share one identity (a cloned disk, a
+restored backup). The newcomer is refused with 4410 `duplicate`, and the refusal is audited
+(`agent.duplicate`), published on the event bus and logged; the live connection is untouched. If
+the existing connection does not answer, it is half-open (the agent restarted or changed networks):
+it is closed with 4409 `replaced` and the new one takes its place. Replacing unconditionally, as
+the first version did, made two clones knock each other off on every reconnect, forever. Anything
+the newcomer sends during the check ends its connection.
+*(Amended 2026-11-11.)*
 
-**Limits.** Upgrades are rate-limited per address, unauthenticated connections are capped and
-have 10 s to authenticate, frames are size-limited, and a connection that sends more than 300
+**Limits.** Upgrades are rate-limited per address. Unauthenticated connections are capped at 200
+in total and 16 per address, and have 10 s to authenticate. Ten failed handshakes from one address
+in 10 minutes (bad signature, anything malformed or out of order before authentication, or silence
+until the timeout) lock that address out for 15 minutes, refused with HTTP 429 before the
+WebSocket upgrade. "Agent is not enrolled" does not count: that is the normal state of a new server
+until someone enrols it, and its 30 s retries would otherwise lock out every agent behind the same
+NAT address. Frames are size-limited, frames are size-limited, and a connection that sends more than 300
 messages in 10 s is closed. Requests with an `Origin` header are refused, so a web page cannot
 open the endpoint. A malformed frame ends the connection; an unknown message type from an
 authenticated peer is answered or skipped, so a newer agent and an older Manager can coexist.
