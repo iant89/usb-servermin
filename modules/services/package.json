@@ -1,6 +1,6 @@
 {
   "name": "@servermin/module-services",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "dependencies": { "@servermin/sdk": "1.0.0", "@servermin/client": "1.0.0" }

@@ -1,7 +1,7 @@
 {
   "id": "services",
   "name": "Services",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "systemd services: status, start, stop, restart, enable, disable and logs.",
   "author": "Server Control",
   "apiVersion": 1,

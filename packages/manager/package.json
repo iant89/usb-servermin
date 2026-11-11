@@ -1,0 +1,14 @@
+{
+  "name": "@servermin/manager",
+  "version": "1.0.0",
+  "description": "Servermin Manager: the central service that keeps the server inventory and, later, talks to the agents.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@servermin/core": "1.0.0",
+    "@servermin/sdk": "1.0.0"
+  }
+}

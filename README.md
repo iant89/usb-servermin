@@ -37,7 +37,8 @@ The UI is built with [ENTERPRISE-UI](https://github.com/iant89/ENTERPRISE-UI) on
 - [Writing a module](#writing-a-module)
 - [CLI](#cli)
 - [Testing](#testing)
-- Further reading: [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md)
+- Servermin transformation: [Roadmap](docs/roadmap.md) · [Project state](docs/project-state.md) · [Current state](docs/architecture/current-state.md) · [Target state](docs/architecture/target-state.md) · [Migration plan](docs/architecture/migration-plan.md)
+- Further reading: [Manager](docs/manager.md) · [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md) · [Releases and updates](docs/releases.md)
 
 ## Quick start (development)
 
@@ -62,6 +63,8 @@ Other commands:
 | `npm run typecheck` | Type-check everything |
 | `npm test` | Unit, module and integration tests |
 | `npm run package` | Build `release/servermin-<version>.tar.gz` and installable module packages in `release/modules/`; add `-- --bundle-node` to include Node.js |
+| `npm run release:keygen` | Create the release signing key (once; see [docs/releases.md](docs/releases.md)) |
+| `npm run set-version -- X.Y.Z` | Set the version before tagging a release |
 | `npm run update-enterprise-ui` | Rebuild the vendored ENTERPRISE-UI package from a sibling checkout |
 
 ## Install on Ubuntu Server
@@ -84,12 +87,20 @@ For a portable USB installation, bundle the Node.js runtime so the stick does no
 host's packages: `npm run package -- --bundle-node [--arch x64,arm64]` downloads the pinned
 official build (`servermin.nodeVersion` in `package.json`), verifies its SHA-256 and includes it.
 
+To also run the central [Servermin Manager](docs/manager.md) on a server, install with
+`sudo ./install.sh --manager`. It is a separate service with its own account, port (8480) and data.
+
 After installing, check everything end to end on the server:
 
 ```bash
 sudo servermin-verify --user admin            # host setup, privilege boundary, every module (changes nothing)
 sudo servermin-verify --user admin --docker   # plus opt-in checks: --mount, --service, --updates, --network-rollback
 ```
+
+Once installed, a server updates itself from signed GitHub releases: Settings → Updates (or
+`serverctl update`) checks daily, installs on request or automatically in a maintenance window, and
+rolls back if the new version does not start. Publishing a release is `npm run set-version`, a tag
+and a push; see [docs/releases.md](docs/releases.md).
 
 The [real-hardware checklist](docs/hardware-checklist.md) covers the rest: reboots, moving the stick
 to another machine, and network rollback with a console attached.
@@ -105,6 +116,7 @@ packages/
   client/     @servermin/client  browser runtime shared by the shell and module UIs: API client,
                                  WebSocket channels, router, frontend registry, React hooks
   shell/      @servermin/shell   the React application shell (ENTERPRISE-UI)
+  manager/    @servermin/manager the Servermin Manager: accounts, server inventory, API (docs/manager.md)
   cli/        serverctl          command-line client for the API
 modules/      the nine built-in modules (each: module.json, src/backend, src/frontend, test)
 examples/     hello: a minimal module that exercises every extension point
@@ -151,10 +163,25 @@ docs/         architecture, module development, security, operations
 | **Storage** | Disks and partitions (marks the USB system disk), file systems, usage, mount/unmount with safe locations and confirmation, S.M.A.R.T. health |
 | **Network** | Interfaces, addresses, routes, gateway, DNS; static/DHCP configuration through netplan that rolls back automatically unless confirmed, with a warning before you cut your own connection |
 | **Services** | systemd services: status, start, stop, restart, enable, disable, journal logs; failure notifications |
-| **Applications** | Applications with versions, deployments, environment, ports and domains; deploy container images, Compose stacks, static sites, Node.js apps or existing system services |
+| **Applications** | Applications with versions, deployments, environment, ports and domains; deploy container images, Compose stacks, static sites, Node.js apps or existing system services; an **app catalogue** installs ready-made applications (Nextcloud, Vaultwarden, Jellyfin, Gitea, Home Assistant, Pi-hole, databases and more) from a short form |
 | **Logs** | Journal (system and services), container logs and platform/module logs: search, severity filter, live streaming, export |
 | **Terminal** | A browser terminal (xterm.js ↔ WebSocket ↔ PTY ↔ shell), audited, with idle timeout |
 | **Monitoring** | CPU, memory, disk, network, load and process history, live samples, threshold alerts, and metrics contributed by any module |
+
+### App catalogue
+
+Applications → *App catalogue* lists curated Docker Compose templates. Installing one asks only for
+what matters (ports, folders, passwords), checks that the ports are free, generates any password you
+leave empty, and creates an ordinary Compose application that is deployed in the background. Its
+settings stay editable afterwards (Edit → Environment, then Deploy): they are written next to the
+compose file as a `.env` file (mode 0600) that Docker Compose reads, and secrets are hidden in the UI.
+
+Templates live in `modules/applications/src/backend/catalog.ts`. A new template needs every
+`${VARIABLE}` in its compose file declared as a parameter, password parameters named so they are
+hidden (`…PASSWORD`, `…TOKEN`, `…KEY`, `…SECRET`), and `${APP_VERSION}` as the main image tag. The
+tests check all of that and, where Docker is installed, run `docker compose config` on every template.
+The catalogue ships with the Applications module, so new templates reach servers through a module
+update (Settings → Updates) without updating the core.
 
 ## Writing a module
 
@@ -199,7 +226,16 @@ serverctl module enable | disable | reload | restart <id>
 serverctl module remove <id> [--delete-data]
 serverctl module logs <id> [--level WARN] [--limit 200]
 serverctl module config <id> [key=value …]
+serverctl update [check]                  # installed and latest version, module updates
+serverctl update apply [--yes]            # install the latest release (restart, rollback on failure)
+serverctl update module <id>              # install one module package from the latest release
+serverctl update auto on|off [--window 03:00]
+serverctl update rollback [--yes]
 ```
+
+`servermin-agent` describes the server itself: `sudo servermin-agent status` prints its server id,
+agent id, hostname, version and state; after `serverctl login` it also lists the capabilities the
+active modules provide.
 
 ## Testing
 

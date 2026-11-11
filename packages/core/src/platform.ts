@@ -1,24 +1,39 @@
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import type { HealthStatus, LogLevel } from '@servermin/sdk';
+import { AgentService } from './agent/agent-service';
 import { AuditLog } from './audit/audit';
 import { AuthService } from './auth/auth-service';
-import { randomToken } from './auth/passwords';
-import type { CoreConfig } from './config/config';
+import { SetupToken } from './auth/setup-token';
+import { agentStateDir, type CoreConfig } from './config/config';
 import { CORE_MIGRATIONS, Database } from './database/database';
 import { EventBus } from './events/event-bus';
-import type { PlatformSettings } from './http/api';
-import { HttpServer } from './http/server';
+import { SESSION_COOKIE, registerCoreRoutes, type PlatformSettings } from './http/api';
+import { HttpServer, type ErrorResponse } from './http/server';
+import { InstallError } from './modules/installer';
+import { RpcError } from './modules/rpc';
 import { LogService } from './logging/logger';
-import { ModuleManager } from './modules/module-manager';
+import { ModuleError, ModuleManager } from './modules/module-manager';
 import { NotificationService } from './notifications/notifications';
-import { ProcessService } from './process/process-service';
+import { ProcessError, ProcessService } from './process/process-service';
 import { StorageClient } from './storage/storage-client';
+import { UpdateError, UpdateService } from './updates/update-service';
+import { coreChannels } from './websocket/core-channels';
 import { ChannelHub } from './websocket/channel-hub';
 import { WebSocketGateway } from './websocket/gateway';
 import { CORE_VERSION } from './version';
+
+/** The agent's own error types, with messages that are safe to show to a client. */
+function mapError(e: unknown): ErrorResponse | undefined {
+  if (e instanceof ModuleError) return { status: e.status, body: { error: e.message, problems: e.problems } };
+  if (e instanceof InstallError) return { status: e.status, body: { error: e.message, problems: e.problems } };
+  if (e instanceof ProcessError) return { status: e.status, body: { error: e.message } };
+  if (e instanceof UpdateError) return { status: e.status, body: { error: e.message } };
+  if (e instanceof RpcError) return { status: e.status ?? 502, body: { error: e.message, details: e.details } };
+  return undefined;
+}
 
 export interface PlatformOptions {
   /** Path of the bundled worker host. Defaults to `module-host.js` next to this file. */
@@ -44,6 +59,9 @@ export class Platform {
   notifications!: NotificationService;
   processes!: ProcessService;
   modules!: ModuleManager;
+  updates!: UpdateService;
+  agent!: AgentService;
+  setupToken!: SetupToken;
   http!: HttpServer;
   gateway!: WebSocketGateway;
   address: { port: number; host: string } | null = null;
@@ -99,17 +117,48 @@ export class Platform {
       hostname: os.hostname(),
       workerScript: this.options.workerScript ?? join(dirname(fileURLToPath(import.meta.url)), 'module-host.js'),
     });
+    this.updates = new UpdateService(this);
+    this.agent = new AgentService({
+      stateDir: agentStateDir(this.config),
+      logger: this.logs.logger('agent'),
+      modules: () => this.modules.list().map((m) => ({ id: m.id, version: m.version, state: m.state, health: m.health.status, provides: m.provides, tags: m.capabilities })),
+      health: () => this.health().status,
+      serverName: () => this.settings().serverName,
+    });
+    const { replaced } = this.agent.start();
+    if (replaced)
+      this.notifications.notify({
+        title: 'Agent identity replaced',
+        message: `The identity file was unreadable (${replaced.reason}) and a new identity was created. A Servermin Manager will see this server as new. The old file was kept as ${replaced.keptAs}.`,
+        tone: 'error',
+        permission: 'platform.config',
+      });
+    this.setupToken = new SetupToken(join(paths.data, 'setup-token'));
     this.ensureSetupToken();
 
     // The API is available before modules finish loading so a broken module never locks users out.
-    this.http = new HttpServer(this);
-    this.gateway = new WebSocketGateway(this, this.http);
+    this.http = new HttpServer({
+      logs: this.logs,
+      auth: this.auth,
+      audit: this.audit,
+      http: this.config.http,
+      dev: this.config.dev,
+      sessionCookie: SESSION_COOKIE,
+      shellDir: this.config.paths.shell,
+      modules: this.modules,
+      registerRoutes: (router) => registerCoreRoutes(router, this),
+      mapError,
+    });
+    this.gateway = new WebSocketGateway({ logs: this.logs, auth: this.auth, hub: this.hub, modules: this.modules, channels: coreChannels(this) }, this.http);
     this.address = await this.http.listen();
     this.log.info(`Listening on ${this.config.http.tls ? 'https' : 'http'}://${this.address.host}:${this.address.port}`);
 
     await this.modules.init();
     const states = this.modules.list().map((m) => `${m.id}=${m.state}`);
     this.log.info(`Modules: ${states.join(', ') || 'none installed'}`);
+
+    this.updates.start();
+    this.agent.setState('RUNNING');
 
     this.pruneTimer = setInterval(() => void this.logs.prune(this.config.logging.retentionDays), 3_600_000);
     this.pruneTimer.unref();
@@ -119,28 +168,13 @@ export class Platform {
 
   // ── First-run setup token ──────────────────────────────────────────────────────
 
-  private setupTokenFile() {
-    return join(this.config.paths.data, 'setup-token');
-  }
-
   private ensureSetupToken() {
     if (this.auth.userCount() > 0) return;
-    const file = this.setupTokenFile();
-    if (!existsSync(file)) writeFileSync(file, randomToken(12) + '\n', { mode: 0o600 });
-    const token = readFileSync(file, 'utf8').trim();
+    const token = this.setupToken.ensure();
     // Written to stdout (journald) only, never to the stored platform logs.
     process.stdout.write(
-      `\n  Server Control needs an administrator.\n  Open the web interface and enter this setup token: ${token}\n  (also stored in ${file})\n\n`,
+      `\n  Server Control needs an administrator.\n  Open the web interface and enter this setup token: ${token}\n  (also stored in ${this.setupToken.file})\n\n`,
     );
-  }
-
-  checkSetupToken(token: string) {
-    const file = this.setupTokenFile();
-    return existsSync(file) && readFileSync(file, 'utf8').trim() === token.trim();
-  }
-
-  consumeSetupToken() {
-    rmSync(this.setupTokenFile(), { force: true });
   }
 
   // ── Platform settings (editable at runtime) ────────────────────────────────────
@@ -189,7 +223,9 @@ export class Platform {
 
   async stop() {
     this.log.info('Shutting down');
+    this.agent?.setState('STOPPING');
     if (this.pruneTimer) clearInterval(this.pruneTimer);
+    this.updates?.stop();
     this.gateway?.close();
     await this.http?.close();
     await this.modules?.shutdown();

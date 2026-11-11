@@ -12,6 +12,9 @@ describe('privilege helper', () => {
     [[], /usage/],
     [['power.reboot', 'now=1'], /unexpected argument now/],
     [['service.stop', 'unit=server-control.service'], /refusing to stop Server Control/],
+    [['service.stop', 'unit=servermin-agent.service'], /refusing to stop Server Control/],
+    [['service.restart', 'unit=servermin-agent.service'], /refusing to restart Server Control/],
+    [['service.disable', 'unit=servermin-agent.service'], /refusing to disable Server Control/],
     [['service.restart', 'unit=nginx.service;reboot'], /invalid or missing argument: unit/],
     [['service.start', 'unit=nginx.service', 'unit=x.service'], /duplicate argument/],
     [['system.set-hostname', 'hostname=-x-'], /hostname/],
@@ -23,6 +26,11 @@ describe('privilege helper', () => {
     [['network.apply', 'file=/etc/shadow', 'rollback=60'], /file/],
     [['network.apply', 'file=/var/lib/servermin/module-data/network/staged-netplan.yaml', 'rollback=10'], /rollback must be 30-900/],
     [['storage.smart', 'device=/dev/sda;id'], /device/],
+    [['platform.update', 'manifest=/etc/shadow', 'signature=/var/tmp/servermin/updates/a.sig', 'archive=/var/tmp/servermin/updates/a.tar.gz'], /manifest/],
+    [['platform.update', 'manifest=/var/tmp/servermin/updates/../x', 'signature=/var/tmp/servermin/updates/a.sig', 'archive=/var/tmp/servermin/updates/a.tar.gz'], /manifest/],
+    [['platform.update', 'manifest=/var/tmp/servermin/updates/release.json'], /signature/],
+    [['platform.update', 'manifest=/var/tmp/servermin/updates/missing.json', 'signature=/var/tmp/servermin/updates/a.sig', 'archive=/var/tmp/servermin/updates/a.tar.gz'], /not a regular file/],
+    [['platform.rollback', 'version=1.0.0'], /unexpected argument version/],
     [['bad-key!=1'], /unknown operation|invalid argument name/],
   ])('rejects %j', (args, message) => {
     const r = run(...(args as string[]));

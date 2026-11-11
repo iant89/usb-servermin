@@ -1,0 +1,49 @@
+name: Release
+
+# Push a tag such as v1.1.0 (after `npm run set-version -- 1.1.0`) to publish a signed release.
+# Installed servers find it through the GitHub Releases API and verify release.json.sig with the
+# public key they already have, so the RELEASE_SIGNING_KEY secret must match deploy/release-signing.pub.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check the tag matches the version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version (run npm run set-version)"
+            exit 1
+          fi
+          grep -q "CORE_VERSION = '$version'" packages/core/src/version.ts || { echo "::error::packages/core/src/version.ts is not $version"; exit 1; }
+      - name: Check the signing key is configured
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "::error::Add the RELEASE_SIGNING_KEY secret (npm run release:keygen)"; exit 1; }
+          [ -f deploy/release-signing.pub ] || { echo "::error::Commit deploy/release-signing.pub (npm run release:keygen)"; exit 1; }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - name: Package and sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: npm run package -- --bundle-node --arch x64,arm64 --sign
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "Server Control $GITHUB_REF_NAME" --generate-notes \
+            release/*.tar.gz release/*.tar.gz.sha256 release/modules/*.tgz release/release.json release/release.json.sig

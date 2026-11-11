@@ -16,6 +16,9 @@ const UNIT = /^[A-Za-z0-9@_.:\\-]{1,200}\.(service|socket|timer|target|mount|pat
 const DEVICE = /^\/dev\/[A-Za-z0-9/_.:-]{1,120}$/;
 const ABS_PATH = /^\/(?!.*\.\.)[A-Za-z0-9/_.@:+-]{0,250}$/;
 
+/** Files the core downloads for an update; the helper copies them somewhere root-owned before use. */
+const UPDATE_FILE = /^\/var\/tmp\/servermin\/updates\/(?!.*\.\.)[A-Za-z0-9._-]{1,120}$/;
+
 export const PRIVILEGED_OPERATIONS = {
   'power.reboot': { description: 'Reboot the server', args: {}, confirm: true },
   'power.shutdown': { description: 'Power off the server', args: {}, confirm: true },
@@ -66,6 +69,16 @@ export const PRIVILEGED_OPERATIONS = {
   },
   'network.confirm': { description: 'Keep the applied network configuration (cancel rollback)', args: {} },
   'network.rollback': { description: 'Restore the previous network configuration', args: {} },
+  'platform.update': {
+    description: 'Install a signed Server Control release (verified again as root; rolls back on failure)',
+    args: {
+      manifest: { pattern: UPDATE_FILE, required: true, description: 'Downloaded release.json' },
+      signature: { pattern: UPDATE_FILE, required: true, description: 'Downloaded release.json.sig' },
+      archive: { pattern: UPDATE_FILE, required: true, description: 'Downloaded release archive' },
+    },
+    confirm: true,
+  },
+  'platform.rollback': { description: 'Reinstall the previous Server Control version', args: {}, confirm: true },
 } satisfies Record<string, PrivilegedOperationSpec>;
 
 export type PrivilegedOperationId = keyof typeof PRIVILEGED_OPERATIONS;

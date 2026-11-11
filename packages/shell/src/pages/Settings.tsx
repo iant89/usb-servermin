@@ -24,6 +24,7 @@ import {
   useToast,
 } from '@enterprise-ui/react';
 import { ErrorMessage, Guard, QueryView, api, formatDate, formatRelative, navigate, usePermission, usePlatform, useLocation, useQuery } from '@servermin/client';
+import { UpdatesPanel } from './Updates';
 import { UsersPanel } from './Users';
 
 export function SettingsPage() {
@@ -32,6 +33,7 @@ export function SettingsPage() {
   const canUsers = usePermission('users.manage');
   const canAudit = usePermission('audit.read');
   const canLogs = usePermission('platform.logs.read');
+  const canUpdate = usePermission('platform.update');
   const setTab = (t: string) => navigate(`/settings${t === 'general' ? '' : `?tab=${t}`}`, { replace: true });
   return (
     <Page title="Settings">
@@ -42,6 +44,7 @@ export function SettingsPage() {
           {canUsers ? <Tab value="users">Users</Tab> : null}
           {canAudit ? <Tab value="audit">Audit log</Tab> : null}
           {canLogs ? <Tab value="logs">Platform logs</Tab> : null}
+          {canUpdate ? <Tab value="updates">Updates</Tab> : null}
           <Tab value="about">About</Tab>
         </TabList>
         <TabPanel value="general">
@@ -63,6 +66,11 @@ export function SettingsPage() {
         {canLogs ? (
           <TabPanel value="logs">
             <PlatformLogs />
+          </TabPanel>
+        ) : null}
+        {canUpdate ? (
+          <TabPanel value="updates">
+            <UpdatesPanel />
           </TabPanel>
         ) : null}
         <TabPanel value="about">

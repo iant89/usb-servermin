@@ -7,6 +7,8 @@ export interface AppSpec {
   image?: string;
   /** compose: compose.yaml content. */
   compose?: string;
+  /** Installed from the app catalogue. */
+  catalog?: { id: string; web?: { port?: string; fixedPort?: number; path?: string; scheme?: string } };
   /** static/node: directory on the host. */
   directory?: string;
   /** node: start command and runtime version. */
@@ -45,6 +47,7 @@ const UNIT_RE = /^[A-Za-z0-9@_.:\\-]{1,200}\.service$/;
 export function validateApp(a: Partial<Application>, isNew: boolean): string[] {
   const p: string[] = [];
   if (isNew && (!a.id || !APP_ID_RE.test(a.id))) p.push('id: 2-41 lowercase letters, digits or hyphens, starting with a letter');
+  if (isNew && a.id === 'catalog') p.push('id: "catalog" is reserved');
   if (!a.name?.trim() || a.name.length > 80) p.push('name: 1-80 characters');
   if (!['docker', 'compose', 'static', 'node', 'service'].includes(a.type as string)) p.push('type must be docker, compose, static, node or service');
   if (!a.version || !VERSION_RE.test(a.version)) p.push('version: letters, digits, ., _ or - (e.g. 1.2.0 or latest)');
@@ -78,6 +81,8 @@ export function validateApp(a: Partial<Application>, isNew: boolean): string[] {
   for (const d of a.domains ?? []) if (!DOMAIN_RE.test(d)) p.push(`domain "${d}" is not a valid host name`);
   for (const k of Object.keys(a.environment ?? {})) if (!ENV_RE.test(k)) p.push(`environment variable "${k}" has an invalid name`);
   if (Object.values(a.environment ?? {}).some((v) => typeof v !== 'string' || v.length > 10_000)) p.push('environment values must be text');
+  // Compose applications get their environment as a .env file, which cannot hold these.
+  if (a.type === 'compose') for (const [k, v] of Object.entries(a.environment ?? {})) if (typeof v === 'string' && /[\n\r'\0]/.test(v)) p.push(`environment variable "${k}" must be one line without single quotes`);
   return p;
 }
 

@@ -3,6 +3,7 @@
 #
 #   sudo ./install.sh                 install or upgrade
 #   sudo ./install.sh --port 8080     listen on another port (default 80)
+#   sudo ./install.sh --manager       also run the Servermin Manager on this server (port 8480)
 #   sudo ./install.sh --uninstall     remove the program (keeps /var/lib/servermin and /etc/servermin)
 #
 # Layout (§48): program /opt/servermin · configuration /etc/servermin · data /var/lib/servermin
@@ -13,10 +14,12 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 APP=/opt/servermin
 PORT=""
 UNINSTALL=0
+MANAGER=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --manager) MANAGER=1; shift ;;
     *) echo "Unknown option $1" >&2; exit 1 ;;
   esac
 done
@@ -25,10 +28,14 @@ done
 
 if [[ $UNINSTALL -eq 1 ]]; then
   systemctl disable --now server-control.service 2>/dev/null || true
-  rm -f /etc/systemd/system/server-control.service /etc/sudoers.d/servermin /usr/local/bin/serverctl /usr/local/bin/servermin-verify
-  rm -rf "$APP" /usr/lib/servermin
+  systemctl disable --now servermin-manager.service 2>/dev/null || true
+  rm -f /etc/systemd/system/servermin-manager.service
+  rm -f /etc/systemd/system/server-control.service /etc/systemd/system/servermin-agent.service /etc/sudoers.d/servermin
+  rm -f /usr/local/bin/serverctl /usr/local/bin/servermin-verify /usr/local/bin/servermin-agent
+  rm -rf "$APP" "$APP.previous" /usr/lib/servermin
   systemctl daemon-reload
   echo "Removed. Data in /var/lib/servermin and configuration in /etc/servermin were kept."
+  [[ -d /var/lib/servermin-manager ]] && echo "Manager data in /var/lib/servermin-manager was kept."
   exit 0
 fi
 
@@ -77,12 +84,25 @@ fi
 rm -rf "$APP.new"
 mkdir -p "$APP.new"
 cp -a "$SRC/server" "$SRC/shell" "$SRC/modules" "$SRC/cli" "$SRC/bin" "$APP.new/"
+[[ -d "$SRC/manager" ]] && cp -a "$SRC/manager" "$APP.new/"
 [[ -d "$SRC/node" ]] && cp -a "$SRC/node" "$APP.new/"
 cp -a "$SRC/README.md" "$SRC/VERSION" "$APP.new/" 2>/dev/null || true
-rm -rf "$APP.old"
-[[ -d "$APP" ]] && mv "$APP" "$APP.old"
+# Kept in the installation so the updater can reinstall or roll back without the original download.
+cp -a "$SRC/deploy" "$APP.new/"
+install -m 755 "$SRC/install.sh" "$APP.new/install.sh"
+[[ -f "$SRC/release-signing.pub" ]] && install -m 644 "$SRC/release-signing.pub" "$APP.new/release-signing.pub"
+if [[ ! -f "$APP.new/release-signing.pub" && -f "$APP/release-signing.pub" ]]; then
+  # Never lose the update trust anchor because a locally built release lacks it.
+  install -m 644 "$APP/release-signing.pub" "$APP.new/release-signing.pub"
+fi
+# The previous version stays as $APP.previous for rollback.
+if [[ -d "$APP" && "$(cat "$APP/VERSION" 2>/dev/null)" != "$(cat "$SRC/VERSION" 2>/dev/null)" ]]; then
+  rm -rf "$APP.previous"
+  mv "$APP" "$APP.previous"
+else
+  rm -rf "$APP"
+fi
 mv "$APP.new" "$APP"
-rm -rf "$APP.old"
 chown -R root:root "$APP"
 chmod -R go-w "$APP"
 
@@ -102,15 +122,38 @@ for d in /var/lib/servermin /var/log/servermin /var/tmp/servermin /var/lib/serve
 
 ln -sf "$APP/bin/serverctl" /usr/local/bin/serverctl
 ln -sf "$APP/bin/servermin-verify" /usr/local/bin/servermin-verify
+ln -sf "$APP/bin/servermin-agent" /usr/local/bin/servermin-agent
+install -d -m 750 -o servermin -g servermin /var/tmp/servermin/updates
 install -m 644 "$SRC/deploy/server-control.service" /etc/systemd/system/server-control.service
 systemctl daemon-reload
+# Enabling also creates the servermin-agent.service alias the unit declares (on upgrades too).
 systemctl enable --now server-control.service
+
+# ── Manager (optional) ───────────────────────────────────────────────────────────
+# Installed when asked for, and kept up to date on a server that already runs it.
+MANAGER_UNIT=/etc/systemd/system/servermin-manager.service
+if [[ $MANAGER -eq 1 || -f "$MANAGER_UNIT" ]]; then
+  # Its own account, with no sudo rule: the Manager must never be able to run the privilege helper.
+  getent group servermin-manager >/dev/null || groupadd --system servermin-manager
+  id servermin-manager >/dev/null 2>&1 || useradd --system --gid servermin-manager --home-dir /var/lib/servermin-manager --no-create-home --shell /usr/sbin/nologin --comment "Servermin Manager" servermin-manager
+  install -d -m 750 -o root -g servermin-manager /etc/servermin-manager
+  install -d -m 700 -o servermin-manager -g servermin-manager /var/lib/servermin-manager
+  install -m 644 "$SRC/deploy/servermin-manager.service" "$MANAGER_UNIT"
+  systemctl daemon-reload
+  if [[ $MANAGER -eq 1 ]]; then systemctl enable --now servermin-manager.service; else systemctl try-restart servermin-manager.service; fi
+fi
 
 echo
 echo "Server Control is running:  systemctl status server-control"
 echo "Runtime: $([[ -x $APP/node/bin/node ]] && echo "bundled Node.js $($APP/node/bin/node --version)" || echo "system Node.js $($NODE --version)")"
+echo "This server's identity:  sudo servermin-agent status"
 echo "Check the installation:   sudo servermin-verify"
 sleep 2
+if [[ $MANAGER -eq 1 ]]; then
+  MPORT="$("$NODE" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("/etc/servermin-manager/config.json")).http.port??8480))}catch{process.stdout.write("8480")}')"
+  echo "Servermin Manager:        systemctl status servermin-manager   (http://$(hostname -I | awk '{print $1}'):$MPORT/api/v1/health)"
+  [[ -f /var/lib/servermin-manager/setup-token ]] && echo "Manager setup token:      $(cat /var/lib/servermin-manager/setup-token)"
+fi
 if [[ -f /var/lib/servermin/setup-token ]]; then
   echo "Open http://$(hostname -I | awk '{print $1}')${PORT:+:$PORT}/ and enter the setup token: $(cat /var/lib/servermin/setup-token)"
 fi

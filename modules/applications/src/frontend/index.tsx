@@ -22,6 +22,7 @@ import {
   TextArea,
   useToast,
 } from '@enterprise-ui/react';
+import { CatalogPage } from './catalog';
 import { ApiRequestError, ErrorMessage, Guard, QueryView, formatDate, formatRelative, linkHandler, modulePath, navigate, registerFrontend, useConfirm, useModuleApi, useQuery, type ModuleRouteProps } from '@servermin/client';
 
 interface App {
@@ -47,7 +48,14 @@ const TYPES = [
   { value: 'service', label: 'System service' },
 ];
 const typeLabel = (t: string) => TYPES.find((x) => x.value === t)?.label ?? t;
-const stateTone = (s: string) => (s === 'running' ? 'success' : s === 'failed' ? 'error' : s === 'degraded' ? 'warning' : s === 'unknown' ? 'warning' : 'neutral');
+const stateTone = (s: string) => (s === 'running' ? 'success' : s === 'failed' ? 'error' : s === 'degraded' ? 'warning' : s === 'unknown' ? 'warning' : s === 'deploying' ? 'information' : 'neutral');
+
+/** Web address of a catalogue application, on the host name the browser already uses. */
+function webUrl(a: App) {
+  const web = a.spec.catalog?.web as { port?: string; fixedPort?: number; path?: string; scheme?: string } | undefined;
+  const port = web?.fixedPort ?? (web?.port ? a.environment[web.port] : undefined);
+  return web && port ? `${web.scheme ?? 'http'}://${window.location.hostname}:${port}${web.path ?? '/'}` : null;
+}
 
 function AppsPage() {
   const api = useModuleApi();
@@ -60,15 +68,23 @@ function AppsPage() {
       subtitle="Software deployed on this server, with versions and deployment history."
       actions={
         <Guard permission="applications.write">
-          <Button variant="primary" icon="add" onClick={() => setCreating(true)}>
-            New application
-          </Button>
+          <Flex gap={2}>
+            <Button onClick={() => navigate(modulePath('applications', '/catalog'))}>App catalogue</Button>
+            <Button variant="primary" icon="add" onClick={() => setCreating(true)}>
+              New application
+            </Button>
+          </Flex>
         </Guard>
       }
     >
       <Stack gap={3}>
         {caps.data && !caps.data.docker ? <MessageStrip tone="information">The Docker module is not active. Only system-service applications can be deployed until it is enabled.</MessageStrip> : null}
-        <QueryView query={q} empty={<EmptyState icon="product" title="No applications yet" description="Deploy a container image, a Compose stack, a static site, a Node.js app or manage an existing system service." />}>
+        <QueryView query={q} empty={<EmptyState
+              icon="product"
+              title="No applications yet"
+              description="Install one from the app catalogue, or deploy a container image, a Compose stack, a static site, a Node.js app or an existing system service."
+              actions={<Button variant="primary" onClick={() => navigate(modulePath('applications', '/catalog'))}>Browse the catalogue</Button>}
+            />}>
           {(apps) => (
             <Table
               caption="Applications"
@@ -143,7 +159,7 @@ function AppDialog({ app, onClose, onSaved }: { app?: App; onClose: () => void; 
       description: f.description,
       type,
       version: f.version,
-      spec: { image: f.image || undefined, compose: type === 'compose' ? f.compose : undefined, directory: f.directory || undefined, command: f.command || undefined, nodeVersion: type === 'node' ? f.nodeVersion : undefined, unit: f.unit || undefined, volumes: lines(f.volumes) },
+      spec: { ...(app?.spec.catalog ? { catalog: app.spec.catalog } : {}), image: f.image || undefined, compose: type === 'compose' ? f.compose : undefined, directory: f.directory || undefined, command: f.command || undefined, nodeVersion: type === 'node' ? f.nodeVersion : undefined, unit: f.unit || undefined, volumes: lines(f.volumes) },
       ports: lines(f.ports),
       domains: lines(f.domains),
       environment: textToEnv(f.env),
@@ -158,6 +174,7 @@ function AppDialog({ app, onClose, onSaved }: { app?: App; onClose: () => void; 
     }
   };
   const containerBased = type !== 'service' && type !== 'compose';
+  const fromCatalog = !!app?.spec.catalog;
   return (
     <Dialog
       open
@@ -185,7 +202,12 @@ function AppDialog({ app, onClose, onSaved }: { app?: App; onClose: () => void; 
           <Input label={type === 'docker' ? 'Version (image tag)' : 'Version'} value={f.version} onChange={set('version')} className="sm-mono" />
         </Flex>
         {type === 'docker' ? <Input label="Image" value={f.image} onChange={set('image')} placeholder="ghcr.io/example/app" className="sm-mono" required /> : null}
-        {type === 'compose' ? <TextArea label="compose.yaml" description="${APP_VERSION} is replaced with the version being deployed." value={f.compose} onChange={set('compose')} rows={12} className="sm-mono" /> : null}
+        {type === 'compose' ? (
+          <>
+            <TextArea label="compose.yaml" description={fromCatalog ? 'From the app catalogue. Change the settings below instead where you can.' : '${APP_VERSION} is replaced with the version being deployed; ${NAME} with a variable from Environment.'} value={f.compose} onChange={set('compose')} rows={12} className="sm-mono" />
+            <TextArea label="Environment" description="One KEY=value per line, used for ${KEY} in the compose file. Values of keys containing PASS, SECRET, TOKEN or KEY are hidden. Redeploy to apply changes." value={f.env} onChange={set('env')} rows={6} className="sm-mono" />
+          </>
+        ) : null}
         {type === 'static' || type === 'node' ? <Input label="Directory on the server" value={f.directory} onChange={set('directory')} placeholder="/srv/www/site" className="sm-mono" required /> : null}
         {type === 'node' ? (
           <Flex gap={3} wrap>
@@ -253,6 +275,9 @@ function AppDetail({ params }: ModuleRouteProps) {
       actions={
         app ? (
           <Flex gap={2} wrap>
+            {webUrl(app) && app.status.state === 'running' ? (
+              <Button onClick={() => window.open(webUrl(app)!, '_blank', 'noopener')}>Open</Button>
+            ) : null}
             <Guard permission="applications.deploy">
               <Button variant="primary" icon="upload" loading={busy === 'deploy'} onClick={() => { setVersion(app.version); setDeployOpen(true); }}>
                 Deploy
@@ -310,7 +335,8 @@ function AppDetail({ params }: ModuleRouteProps) {
                   <DescriptionList
                     columns={3}
                     items={[
-                      { term: 'Type', description: typeLabel(a.type) },
+                      { term: 'Type', description: a.spec.catalog ? `${typeLabel(a.type)} · from the app catalogue` : typeLabel(a.type) },
+                      { term: 'Web interface', description: webUrl(a) ? <a href={webUrl(a)!} target="_blank" rel="noreferrer">{webUrl(a)}</a> : undefined },
                       { term: 'Deployed version', description: a.deployedVersion ?? 'Not deployed' },
                       { term: 'Configured version', description: a.version },
                       { term: 'Image', description: a.spec.image ? <span className="sm-mono">{a.spec.image}</span> : undefined },
@@ -419,9 +445,13 @@ function AppsWidget() {
 registerFrontend('applications', {
   routes: [
     { path: '/', component: AppsPage, permission: 'applications.read' },
+    { path: '/catalog', component: CatalogPage, permission: 'applications.read' },
     { path: '/:id', component: AppDetail, permission: 'applications.read' },
   ],
   navigation: [{ id: 'applications', label: 'Applications', icon: 'product', order: 60, permission: 'applications.read' }],
   widgets: [{ id: 'list', title: 'Applications', component: AppsWidget, order: 60, permission: 'applications.read' }],
-  commands: [{ id: 'new', label: 'Deploy an application', path: '/', permission: 'applications.write' }],
+  commands: [
+    { id: 'new', label: 'Deploy an application', path: '/', permission: 'applications.write' },
+    { id: 'catalog', label: 'Install from the app catalogue', path: '/catalog', permission: 'applications.write' },
+  ],
 });

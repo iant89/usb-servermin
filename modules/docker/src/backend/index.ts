@@ -1,9 +1,20 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError, defineModule, type HealthResult, type ModuleContext, type RouteOptions } from '@servermin/sdk';
 import { Demuxer, DockerClient, DockerError, ID_RE, cpuPercent, demux, memoryUsage, q, summarizeContainer } from './docker-client';
 
 const PROJECT_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+
+/** Renders variables as a Compose `.env` file. Single-quoted values are taken literally. */
+export function dotenv(env: Record<string, string>) {
+  return Object.entries(env)
+    .map(([k, v]) => {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new HttpError(400, `Invalid variable name ${k}`);
+      if (/[\n\r'\0]/.test(v)) throw new HttpError(400, `${k} must be one line without single quotes`);
+      return `${k}='${v}'`;
+    })
+    .join('\n') + '\n';
+}
 const IMAGE_RE = /^[a-z0-9][a-z0-9._\-/:@]{0,254}$/i;
 
 function id(v: string | undefined, what = 'id') {
@@ -90,13 +101,19 @@ export default defineModule(() => {
     return { output: (r.stdout + r.stderr).trim().slice(-4000) };
   }
 
-  async function writeProject(project: string, yaml: string) {
+  /**
+   * Writes the project's compose file and, when given, its variables as `.env` next to it, which
+   * Docker Compose reads for `${VAR}` substitution on every command (up, down, restart).
+   */
+  async function writeProject(project: string, yaml: string, env?: Record<string, string>) {
     if (!PROJECT_RE.test(project)) throw new HttpError(400, 'Invalid project name');
     if (typeof yaml !== 'string' || !yaml.trim() || yaml.length > 200_000) throw new HttpError(400, 'Provide the compose file content');
     const dir = join(composeDir(), project);
     await mkdir(dir, { recursive: true });
     const file = join(dir, 'compose.yaml');
     await writeFile(file, yaml);
+    if (env && Object.keys(env).length) await writeFile(join(dir, '.env'), dotenv(env), { mode: 0o600 });
+    else if (env) await rm(join(dir, '.env'), { force: true });
     return file;
   }
 
@@ -313,7 +330,7 @@ export default defineModule(() => {
         restartContainer: (cid: string) => docker.json('POST', `/containers/${id(cid)}/restart`, undefined, 60_000),
         removeContainer: (cid: string) => docker.json('DELETE', `/containers/${id(cid)}${q({ force: true })}`).catch((e) => (e.status === 404 ? null : Promise.reject(e))),
         containerLogs: (cid: string, tail = 200) => logs(id(cid), tail),
-        composeUp: async (project: string, yaml: string) => compose(project, ['up', '-d', '--remove-orphans'], await writeProject(project, yaml)),
+        composeUp: async (project: string, yaml: string, env?: Record<string, string>) => compose(project, ['up', '-d', '--remove-orphans'], await writeProject(project, yaml, env)),
         composeDown: (project: string) => compose(project, ['down'], join(composeDir(), project, 'compose.yaml')),
         composeRestart: (project: string) => compose(project, ['restart'], join(composeDir(), project, 'compose.yaml')),
         composeContainers: (project: string) => containers().then((l) => l.filter((x) => x.project === project)),

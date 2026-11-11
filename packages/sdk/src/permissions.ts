@@ -15,6 +15,7 @@ export const CORE_PERMISSIONS = {
   'audit.read': 'Read the audit log',
   'platform.logs.read': 'Read platform and module logs',
   'platform.config': 'Change core platform configuration',
+  'platform.update': 'Check for, install and roll back Server Control updates',
 } as const;
 
 export type CorePermission = keyof typeof CORE_PERMISSIONS;

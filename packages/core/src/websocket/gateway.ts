@@ -2,17 +2,31 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { hasPermission, matchesEventPattern, type RequestUser } from '@servermin/sdk';
-import type { Platform } from '../platform';
+import { hasPermission, type RequestUser } from '@servermin/sdk';
+import type { AuthService } from '../auth/auth-service';
 import type { HttpServer } from '../http/server';
-import type { ChannelClient } from './channel-hub';
+import type { LogService } from '../logging/logger';
+import type { ModuleManager } from '../modules/module-manager';
+import type { ChannelClient, ChannelHub } from './channel-hub';
 
 const MAX_SUBSCRIPTIONS = 64;
 const MAX_MESSAGES_PER_10S = 2000;
 
-interface CoreChannel {
+/** A real-time channel the service itself provides (as opposed to one provided by a module). */
+export interface CoreChannel {
   permission: string;
   subscribe(client: ChannelClient, subId: string, params: Record<string, unknown>): () => void;
+}
+
+/** What the gateway needs from the service it serves (see `HttpHost`). */
+export interface GatewayHost {
+  logs: Pick<LogService, 'logger'>;
+  auth: AuthService;
+  hub: ChannelHub;
+  /** The service's own channels by name. */
+  channels: Record<string, CoreChannel>;
+  /** Module channels; absent on a service that runs no modules. */
+  modules?: Pick<ModuleManager, 'get' | 'canSubscribe'>;
 }
 
 /**
@@ -28,7 +42,7 @@ export class WebSocketGateway {
   private log;
 
   constructor(
-    private readonly p: Platform,
+    private readonly p: GatewayHost,
     private readonly http: HttpServer,
   ) {
     this.log = p.logs.logger('websocket');
@@ -40,45 +54,7 @@ export class WebSocketGateway {
       for (const c of this.connections) if (c.sessionHash && !p.auth.isSessionValid(c.sessionHash)) c.ws.close(4401, 'Session expired');
     }, 60_000);
     this.revalidate.unref();
-    this.registerCoreChannels();
-  }
-
-  private registerCoreChannels() {
-    const { bus, notifications, logs } = this.p;
-    // Module lifecycle changes, so the shell can load, reload or remove module UI (§57).
-    // "Saving…" indicator: pushed when writes start or stop lagging behind on the storage thread.
-    this.coreChannels.set('platform.storage', {
-      permission: 'authenticated',
-      subscribe: (client, subId) => {
-        client.send({ type: 'data', id: subId, data: this.p.storage.activity.status() });
-        return this.p.storage.activity.subscribe((s) => client.send({ type: 'data', id: subId, data: s }));
-      },
-    });
-    this.coreChannels.set('module.status', {
-      permission: 'authenticated',
-      subscribe: (client, subId) =>
-        bus.subscribe('module.**', (e) => client.send({ type: 'data', id: subId, data: e }), 'core'),
-    });
-    this.coreChannels.set('notifications', {
-      permission: 'authenticated',
-      subscribe: (client, subId) =>
-        notifications.subscribe((n) => notifications.visibleTo(client.user.permissions, n) && client.send({ type: 'data', id: subId, data: n })),
-    });
-    this.coreChannels.set('events', {
-      permission: 'platform.logs.read',
-      subscribe: (client, subId, params) => {
-        const pattern = typeof params.pattern === 'string' ? params.pattern : '*';
-        return bus.subscribe('*', (e) => matchesEventPattern(pattern, e.type) && client.send({ type: 'data', id: subId, data: e }), 'core');
-      },
-    });
-    this.coreChannels.set('platform.logs', {
-      permission: 'platform.logs.read',
-      subscribe: (client, subId, params) =>
-        logs.subscribe((entry) => {
-          if (params.module && entry.module !== params.module) return;
-          client.send({ type: 'data', id: subId, data: entry });
-        }),
-    });
+    for (const [name, channel] of Object.entries(p.channels)) this.coreChannels.set(name, channel);
   }
 
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
@@ -154,7 +130,7 @@ export class WebSocketGateway {
           case 'message': {
             const s = id && subs.get(id);
             if (!s?.moduleId) throw new Error('Unknown subscription');
-            const m = this.p.modules.get(s.moduleId);
+            const m = this.p.modules?.get(s.moduleId);
             await m?.instance?.call('channel.message', { id: s.hubId, data: msg.data }, 10_000);
             return;
           }
@@ -179,7 +155,7 @@ export class WebSocketGateway {
     s.cleanup?.();
     const hub = this.p.hub.remove(s.hubId);
     if (hub && s.moduleId) {
-      const m = this.p.modules.get(s.moduleId);
+      const m = this.p.modules?.get(s.moduleId);
       void m?.instance?.call('channel.unsubscribe', { id: s.hubId }, 5000).catch(() => undefined);
     }
   }
@@ -195,7 +171,7 @@ export class WebSocketGateway {
       return;
     }
     const dot = channel.indexOf('.');
-    if (dot < 1) throw Object.assign(new Error('Unknown channel'), { reason: 'unknown-channel' });
+    if (dot < 1 || !this.p.modules) throw Object.assign(new Error('Unknown channel'), { reason: 'unknown-channel' });
     const moduleId = channel.slice(0, dot);
     const local = channel.slice(dot + 1);
     const check = this.p.modules.canSubscribe(moduleId, local, client.user.permissions);

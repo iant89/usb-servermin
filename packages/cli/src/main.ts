@@ -10,6 +10,11 @@
  *   serverctl module enable|disable|reload|restart <id>
  *   serverctl module logs <id> [--level LEVEL] [--limit N]
  *   serverctl module config <id> [key=value ...]
+ *   serverctl update [check]                        show or look for a newer signed release
+ *   serverctl update apply [--yes]                  install it (the server restarts; rolls back on failure)
+ *   serverctl update module <id>                    install one module package from the latest release
+ *   serverctl update auto on|off [--window HH:MM]   automatic installation in a maintenance window
+ *   serverctl update rollback [--yes]               reinstall the previous version
  */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -26,7 +31,12 @@ const USAGE = `serverctl — talks to the platform REST API; it never duplicates
   serverctl module remove <id> [--delete-data]
   serverctl module enable|disable|reload|restart <id>
   serverctl module logs <id> [--level LEVEL] [--limit N]
-  serverctl module config <id> [key=value ...]\n`;
+  serverctl module config <id> [key=value ...]
+  serverctl update [check]                        show or look for a newer signed release
+  serverctl update apply [--yes]                  install it (the server restarts; rolls back on failure)
+  serverctl update module <id>                    install one module package from the latest release
+  serverctl update auto on|off [--window HH:MM]   automatic installation in a maintenance window
+  serverctl update rollback [--yes]               reinstall the previous version\n`;
 
 interface Credentials {
   url: string;
@@ -113,6 +123,68 @@ async function login(args: string[]) {
   console.log(`Logged in to ${url}. Credentials saved to ${CONFIG}.`);
 }
 
+function printUpdates(u: any) {
+  console.log(`Installed: ${u.currentVersion}   Releases: github.com/${u.repository}`);
+  if (u.blocker) console.log(`Not available: ${u.blocker}`);
+  console.log(`Last checked: ${u.checkedAt ?? 'never'}${u.error ? ` (${u.error})` : ''}`);
+  console.log(u.available ? `Available: ${u.available.version} (published ${u.available.publishedAt})  ${u.available.url}` : 'Up to date');
+  if (u.lastResult?.finishedAt) console.log(`Last update: ${u.lastResult.state} ${u.lastResult.from} → ${u.lastResult.to ?? '?'} at ${u.lastResult.finishedAt}${u.lastResult.error ? ` — ${u.lastResult.error}` : ''}`);
+  if (u.applying) console.log(`An update is in progress (${u.lastResult.state}).`);
+  console.log(`Automatic installation: ${u.settings.autoInstall ? `on, at ${u.settings.window}` : 'off'}`);
+  if (u.previousVersion) console.log(`Previous version kept for rollback: ${u.previousVersion}`);
+  if (u.moduleUpdates.length) {
+    console.log('');
+    table(u.moduleUpdates.map((m: any) => ({ ...m, note: m.compatible ? '' : 'needs a newer core' })), ['id', 'installed', 'available', 'note']);
+  }
+}
+
+async function confirm(question: string, args: string[]) {
+  if (bool(args, 'yes')) return;
+  if (!process.stdin.isTTY) fail(`${question} Pass --yes to confirm.`);
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
+  rl.close();
+  if (answer !== 'y' && answer !== 'yes') fail('Cancelled');
+}
+
+async function update(creds: Credentials, args: string[]) {
+  const [sub = 'status', arg] = args;
+  switch (sub) {
+    case 'status':
+      return printUpdates(await call(creds, 'GET', '/api/v1/updates'));
+    case 'check':
+      return printUpdates(await call(creds, 'POST', '/api/v1/updates/check'));
+    case 'apply': {
+      const u = await call(creds, 'GET', '/api/v1/updates');
+      if (!u.available) fail('No newer release is known. Run `serverctl update check` first.');
+      await confirm(`Install Server Control ${u.available.version}? The server restarts.`, args);
+      const r = await call(creds, 'POST', '/api/v1/updates/apply');
+      return console.log(r.simulated ? `Simulated: the update to ${r.version} would start now.` : `Installing ${r.version}. The server restarts; run \`serverctl update\` in a minute or two to see the result.`);
+    }
+    case 'rollback': {
+      const u = await call(creds, 'GET', '/api/v1/updates');
+      if (!u.previousVersion) fail('There is no previous version to roll back to.');
+      await confirm(`Roll back to ${u.previousVersion}? The server restarts and changes since the last update are lost.`, args);
+      const r = await call(creds, 'POST', '/api/v1/updates/rollback');
+      return console.log(`Rolling back to ${r.version}.`);
+    }
+    case 'module': {
+      if (!arg) fail('Module id required');
+      const r = await call(creds, 'POST', `/api/v1/updates/modules/${encodeURIComponent(arg)}`);
+      return console.log(`${arg} is now ${r.module?.version ?? 'updated'}.`);
+    }
+    case 'auto': {
+      if (arg !== 'on' && arg !== 'off') fail('Usage: serverctl update auto on|off [--window HH:MM]');
+      const window = flag(args, 'window');
+      const s = await call(creds, 'PUT', '/api/v1/updates/settings', { autoInstall: arg === 'on', ...(window ? { window } : {}) });
+      return console.log(`Automatic installation ${s.autoInstall ? `on, at ${s.window} (server time)` : 'off'}.`);
+    }
+    default:
+      fail(`Unknown update command "${sub}"`);
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const [cmd, sub, ...rest] = args;
@@ -128,6 +200,7 @@ async function main() {
     table(Object.entries(s.health.modules).map(([id, m]: [string, any]) => ({ module: id, state: m.state, health: m.health, message: m.message ?? '' })), ['module', 'state', 'health', 'message']);
     return;
   }
+  if (cmd === 'update') return update(creds, args.slice(1));
   if (cmd !== 'module') fail(`Unknown command "${cmd}". Try serverctl help.`);
   const id = rest[0];
   const need = () => id ?? fail('Module id required');
