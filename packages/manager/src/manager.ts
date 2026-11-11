@@ -22,15 +22,18 @@ import {
 import { AgentHub } from './agent-hub';
 import type { ManagerConfig } from './config';
 import { AGENTS_SCHEMA, INVENTORY_SCHEMA, Inventory, InventoryError } from './inventory';
+import { REGISTRATION_SCHEMA, RegistrationError, Registrations } from './registrations';
 import { MANAGER_SESSION_COOKIE, registerManagerRoutes } from './routes';
 
 /** Numbered like the core's: applied migrations are recorded and never re-run. */
 export const MANAGER_MIGRATIONS = [
   { version: 1, name: 'manager schema', sql: ACCOUNT_SCHEMA + AUDIT_SCHEMA + KV_SCHEMA + INVENTORY_SCHEMA },
   { version: 2, name: 'agents', sql: AGENTS_SCHEMA },
+  { version: 3, name: 'registration', sql: REGISTRATION_SCHEMA },
 ];
 
 function mapError(e: unknown): ErrorResponse | undefined {
+  if (e instanceof RegistrationError) return { status: e.status, body: { error: e.message } };
   if (e instanceof InventoryError) return { status: e.status, body: { error: e.message } };
   return undefined;
 }
@@ -48,6 +51,7 @@ export class Manager {
   auth!: AuthService;
   audit!: AuditLog;
   inventory!: Inventory;
+  registrations!: Registrations;
   setupToken!: SetupToken;
   http!: HttpServer;
   gateway!: WebSocketGateway;
@@ -78,6 +82,7 @@ export class Manager {
     this.auth = new AuthService(this.db, this.config.auth);
     this.inventory = new Inventory(this.db, this.bus);
     this.inventory.resetConnectionStates();
+    this.registrations = new Registrations(this.db, this.inventory, this.bus);
     this.setupToken = new SetupToken(join(data, 'setup-token'));
     if (this.auth.userCount() === 0) {
       const token = this.setupToken.ensure();
