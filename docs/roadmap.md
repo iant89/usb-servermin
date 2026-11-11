@@ -48,7 +48,7 @@ reviewed and documented — nothing less).
 | 0 | Architecture audit | [x] | The current system can be explained without guessing |
 | 1 | Agent foundation | [x] | Agent starts automatically and reports server id, agent id, hostname, OS, version, capabilities |
 | 2 | Manager foundation | [x] | Manager starts independently and keeps a persistent server inventory |
-| 3 | Agent/Manager protocol | [ ] | Agent disconnects and reconnects without manual intervention |
+| 3 | Agent/Manager protocol | [x] | Agent disconnects and reconnects without manual intervention |
 | 4 | Server registration | [ ] | Code → install → `servermin-agent register CODE` → approve → managed |
 | 5 | Server inventory | [ ] | Manager accurately reflects server state |
 | 6 | Hardware discovery | [ ] | A newly registered server populates its hardware profile automatically |
@@ -123,11 +123,20 @@ Not verified under a running systemd: the sandbox settings of the Manager unit (
 `RestrictAddressFamilies`, …). The unit passes `systemd-analyze verify`, and the program was run
 as the `servermin-manager` account from a real installation, but not inside that sandbox.
 
-### Phase 3 — Agent/Manager protocol `[ ]`
+### Phase 3 — Agent/Manager protocol `[x]`
 
-- [ ] Schema, message ids, correlation ids
-- [ ] Authentication
-- [ ] Reconnection, heartbeat, timeout, backoff, connection state
+- [x] Protocol schema — `packages/protocol`, validated on receipt by both sides
+- [x] Message IDs, correlation IDs
+- [x] Authentication — Ed25519 challenge-response bound to the TLS certificate (ADR-002)
+- [x] Reconnection, backoff — jittered exponential, longer after a refusal
+- [x] Heartbeat, timeout — both directions
+- [x] Connection state — agent: `servermin-agent status`; Manager: `ONLINE`, `DEGRADED`, `STALE`, `OFFLINE`
+- [x] TLS — pinned fingerprint, CA file or public trust; the installer creates the Manager's certificate
+- [x] Manual enrolment and revocation (`PUT`/`DELETE /servers/:id/agent`), ahead of Phase 4
+
+Implemented messages: `HELLO`, `AUTHENTICATION`, `AUTHENTICATED`, `ERROR`, `HEARTBEAT`,
+`SERVER_STATE`, `CAPABILITIES`. Reserved and refused as unsupported until their phases: `METRIC`,
+`EVENT`, `COMMAND`, `COMMAND_RESULT`, `LOG`, `MODULE_STATE`.
 
 ### Phase 4 — Server registration `[ ]`
 

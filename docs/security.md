@@ -15,6 +15,15 @@ Server Control is a privileged administration interface. These are the mechanism
 - Login lockout after `auth.loginAttempts` failures per IP and user, for `auth.lockoutMinutes`. A failed
   login takes the same time whether or not the user exists.
 
+## Connection to a Manager
+
+A server reports to a Manager only when `agent.manager.url` is set. The agent opens the
+connection; nothing listens for the Manager. It checks the Manager's certificate (pinned
+fingerprint, CA file or public trust) before it proves its own identity with an Ed25519 key whose
+private half stays in `agent/agent-key.pem` (0600). In this version the Manager can only read what
+the agent sends (state, version, capabilities) and tell it its server id; it cannot make the agent
+do anything. Details: [ADR-002](adr/ADR-002-agent-outbound-connection.md).
+
 ## Manager
 
 The Servermin Manager is a separate service with a separate account that has no sudo rule and no

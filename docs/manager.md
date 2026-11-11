@@ -4,10 +4,11 @@ The Manager is the central service of Servermin: one place that knows every serv
 separate process from the agent (`server-control.service`), built from the same libraries
 ([ADR-001](adr/ADR-001-manager-agent-architecture.md)).
 
-**What exists today (Phase 2):** accounts, a persistent server inventory, a REST API and a
-WebSocket endpoint. **What does not exist yet:** agents cannot connect to it (Phase 3) or register
-(Phase 4), so every server is in state `UNKNOWN`, and there is no web interface (Phase 8); it is
-driven through the API.
+**What exists today (Phases 2-3):** accounts, a persistent server inventory, a REST API, a
+WebSocket endpoint, and agents that connect to it, so it knows which servers are online.
+**What does not exist yet:** registration codes (Phase 4; agents are enrolled by hand, see
+[Connecting an agent](#connecting-an-agent)), hardware and metrics (Phases 6-7), commands, and a
+web interface (Phase 8); it is driven through the API.
 
 ## Install
 
@@ -18,8 +19,11 @@ sudo ./install.sh --manager
 ```
 
 This creates the `servermin-manager` account, `/etc/servermin-manager`, `/var/lib/servermin-manager`,
-and enables `servermin-manager.service`. It prints the address and the one-time setup token (also in
-the journal and in `/var/lib/servermin-manager/setup-token`). Later updates of the release keep a
+and enables `servermin-manager.service`. On a first install it also creates a self-signed TLS
+certificate (`/etc/servermin-manager/tls.crt`, valid ten years) and a configuration that uses it, so
+the Manager never serves clear text; this needs `openssl`. It prints the address, the certificate
+fingerprint that agents pin, and the one-time setup token (also in the journal and in
+`/var/lib/servermin-manager/setup-token`). Later updates of the release keep a
 Manager that is already installed up to date and restart it.
 
 | What | Where |
@@ -39,7 +43,8 @@ Every setting has a default; the file is only needed to change one.
   "http": { "host": "0.0.0.0", "port": 8480, "tls": { "cert": "/etc/servermin-manager/tls.crt", "key": "/etc/servermin-manager/tls.key" }, "trustProxy": false },
   "paths": { "data": "/var/lib/servermin-manager" },
   "logging": { "level": "INFO" },
-  "auth": { "sessionHours": 12, "loginAttempts": 5, "lockoutMinutes": 15 }
+  "auth": { "sessionHours": 12, "loginAttempts": 5, "lockoutMinutes": 15 },
+  "agents": { "heartbeatSeconds": 15, "timeoutSeconds": 60, "handshakeSeconds": 10 }
 }
 ```
 
@@ -58,9 +63,9 @@ If you move the data directory, also adjust the unit: it only allows writes to i
 
 ```bash
 TOKEN=$(sudo cat /var/lib/servermin-manager/setup-token)
-curl -c cookies -H 'X-Servermin-Request: 1' -H 'Content-Type: application/json' \
+curl --cacert /etc/servermin-manager/tls.crt -c cookies -H 'X-Servermin-Request: 1' -H 'Content-Type: application/json' \
   -d "{\"setupToken\":\"$TOKEN\",\"username\":\"admin\",\"password\":\"a long password 1\"}" \
-  http://manager:8480/api/v1/auth/setup
+  https://localhost:8480/api/v1/auth/setup
 ```
 
 For scripts, create an API token (`POST /api/v1/auth/tokens`) and send it as
@@ -80,26 +85,80 @@ with the same rules, as on an agent (`auth/*`, `users`, `audit`); see [security.
 | `GET servers/:id` | `servers.read` | One server |
 | `POST servers` | `servers.manage` | `{ name, hostname?, description?, id? }` |
 | `PATCH servers/:id` | `servers.manage` | `{ name?, hostname?, description? }`; `hostname: null` clears it |
-| `DELETE servers/:id` | `servers.manage` | |
+| `DELETE servers/:id` | `servers.manage` | Also disconnects its agent |
+| `PUT servers/:id/agent` | `servers.manage` | `{ agentId, publicKey }`: allow this agent to connect as the server (replaces a previous one) |
+| `DELETE servers/:id/agent` | `servers.manage` | Revoke the agent: its connection is closed at once and it cannot return |
 
 A server:
 
 ```json
 { "id": "b8479b5b-…", "name": "Saturn", "hostname": "saturn.lan", "description": "compute",
-  "agentId": null, "agentVersion": null, "state": "UNKNOWN",
-  "createdAt": "…", "updatedAt": "…", "lastSeenAt": null }
+  "agentId": "0ceb5584-…", "agentVersion": "1.0.0", "agentKeyFingerprint": "2df27bd2…",
+  "capabilities": ["docker", "docker.engine", "storage"], "state": "ONLINE",
+  "createdAt": "…", "updatedAt": "…", "lastSeenAt": "…" }
 ```
 
 - `id` is the server id ([ADR-003](adr/ADR-003-server-identity.md)). Pass the output of
   `servermin-agent id` (first line) to describe a server before its agent registers; otherwise an
   id is generated.
 - `name` is 1-64 characters and unique regardless of case.
-- `state`, `agentId`, `agentVersion` and `lastSeenAt` are derived from what an agent reports. They
-  cannot be set through the API.
+- `state`, `agentVersion`, `capabilities` and `lastSeenAt` come from the agent's connection and
+  cannot be set through the API. `capabilities` is what the agent last reported, also while it is
+  offline.
+
+| State | Meaning |
+| --- | --- |
+| `UNKNOWN` | No agent is enrolled for this server |
+| `OFFLINE` | An agent is enrolled and not connected |
+| `ONLINE` | Connected, heartbeats arriving, the agent reports itself healthy |
+| `DEGRADED` | Connected, but the agent reports a problem (a failed module, for example) |
+| `STALE` | Connected, but heartbeats have stopped; `OFFLINE` follows after the timeout |
+
+The other states of the roadmap (`WAKING`, `UPDATING`, …) arrive with the features that cause them.
+After a restart the Manager shows every server `OFFLINE` or `UNKNOWN` until its agent reconnects,
+which takes a few seconds.
 - Every change, and every refused change, is written to the audit log (`server.create`,
   `server.update`, `server.remove`).
 
 Presets: Administrator (`*`), Operator (`servers.read`, `servers.manage`), Viewer (`servers.read`).
+
+## Connecting an agent
+
+Until registration codes exist (Phase 4), three steps by hand. The design is in
+[ADR-002](adr/ADR-002-agent-outbound-connection.md).
+
+1. **On the server**, print what the Manager needs. None of it is secret:
+
+   ```bash
+   sudo servermin-agent key --json
+   ```
+
+2. **On the Manager**, add the server and enrol the agent with that output:
+
+   ```bash
+   curl … -d '{"name":"Saturn","id":"<serverId>"}' https://manager:8480/api/v1/servers
+   curl … -X PUT -d '{"agentId":"<agentId>","publicKey":"<publicKey>"}' https://manager:8480/api/v1/servers/<serverId>/agent
+   ```
+
+3. **On the server**, tell the agent where its Manager is, in `/etc/servermin/config.json`, and
+   restart it (`sudo systemctl restart server-control`):
+
+   ```json
+   { "agent": { "manager": { "url": "https://manager:8480", "fingerprint": "D1:C7:B2:…" } } }
+   ```
+
+   `fingerprint` is the Manager's certificate fingerprint: printed by the installer, shown by
+   `GET /api/v1/manager` (`tls.fingerprint`), or
+   `openssl x509 -in /etc/servermin-manager/tls.crt -noout -fingerprint -sha256`. With a
+   certificate from a CA use `"ca": "/path/to/ca.pem"` instead, or neither if it is publicly trusted.
+
+`servermin-agent status` (after `serverctl login`) shows the connection, and the server turns
+`ONLINE` in the inventory. The order of the steps does not matter: an agent that is not enrolled
+yet keeps trying every 30 seconds, and the attempts are in the Manager's audit log.
+
+To replace the certificate, install the new one, restart the Manager, and update `fingerprint` on
+every agent; agents refuse a certificate they do not know, so do the agents first if you can
+reach them only through the Manager.
 
 ## WebSocket
 
@@ -123,9 +182,14 @@ One channel so far:
   the other's sessions.
 - **Same request protections as the agent**: CSRF header and origin check, rate limiting, login
   lockout, hashed sessions and tokens, security headers.
-- **TLS.** Without `http.tls` (or a reverse proxy) passwords and sessions cross the network in
-  clear text. Use it on a trusted network only until TLS is configured; agent connections
-  (Phase 3) will require TLS.
+- **TLS.** The installer sets it up. A Manager started without `http.tls` logs a warning, and
+  agents refuse to connect to it unless told to accept that (`agent.manager.insecure`).
+- **Agents prove who they are with a key that never leaves their server**, on a connection they
+  open themselves. The Manager stores public keys only: its database cannot be used to
+  impersonate an agent, and it holds nothing that works as a login on a server. The agent endpoint
+  refuses browsers, rate-limits connections, and answers every failed authentication identically.
+- **A reverse proxy that terminates TLS is not supported for agent connections yet**: agents bind
+  their proof to the certificate they see, which would be the proxy's.
 
 ## Backup
 

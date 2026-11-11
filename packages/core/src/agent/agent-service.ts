@@ -2,7 +2,9 @@ import os from 'node:os';
 import type { HealthStatus, Logger, ModuleState } from '@servermin/sdk';
 import { osRelease } from '../system/host-info';
 import { CORE_VERSION } from '../version';
+import { AgentKey } from './agent-key';
 import { IdentityStore, readHardwareIdentity, readMachineId, type AgentIdentity, type HardwareIdentity } from './identity';
+import type { LinkStatus } from './manager-link';
 
 export type AgentState = 'STARTING' | 'RUNNING' | 'STOPPING';
 
@@ -36,6 +38,10 @@ export interface AgentReport {
   /** What this server can do right now: working modules and the services they provide, sorted. */
   capabilities: string[];
   modules: AgentModuleInfo[];
+  /** SHA-256 of the agent's public key: what an administrator compares when enrolling this agent. */
+  keyFingerprint: string;
+  /** Connection to a Servermin Manager. */
+  manager: LinkStatus;
 }
 
 /**
@@ -62,7 +68,11 @@ export interface AgentServiceDeps {
   serverName(): string;
   /** Root of the file system that host facts are read from. Tests only. */
   hostRoot?: string;
+  /** Status of the connection to a Manager; absent while none is wired up. */
+  link?(): LinkStatus;
 }
+
+const NO_LINK: LinkStatus = { configured: false, url: null, state: 'DISABLED', connectedSince: null, lastConnectedAt: null, lastError: null, lastErrorAt: null, attempts: 0, nextAttemptAt: null, protocolVersion: null };
 
 /**
  * The Agent side of Servermin (ADR-001): this server's identity and its description of itself.
@@ -71,6 +81,7 @@ export interface AgentServiceDeps {
 export class AgentService {
   private store: IdentityStore;
   private identityValue: AgentIdentity | null = null;
+  private keyValue: AgentKey | null = null;
   private startedAt = Date.now();
   state: AgentState = 'STARTING';
 
@@ -79,19 +90,33 @@ export class AgentService {
   }
 
   /** Loads or creates the identity. Returns details when a damaged identity had to be replaced. */
-  start(): { replaced?: { keptAs: string; reason: string } } {
+  start(): { replaced?: { keptAs: string; reason: string }; keyReplaced?: { keptAs: string; reason: string } } {
     const r = this.store.load();
     this.identityValue = r.identity;
     this.startedAt = Date.now();
     if (r.replaced) this.d.logger.error('The agent identity file was unreadable and has been replaced; a Manager will see this server as new', { ...r.replaced, agentId: r.identity.agentId });
     else if (r.created) this.d.logger.info('Created agent identity', { agentId: r.identity.agentId, serverId: r.identity.serverId });
+    const k = AgentKey.load(this.d.stateDir);
+    this.keyValue = k.key;
+    if (k.replaced) this.d.logger.error('The agent key file was unreadable and has been replaced; a Manager will refuse this agent until the new key is enrolled', { ...k.replaced, keyFingerprint: k.key.fingerprint });
+    else if (k.created) this.d.logger.info('Created agent key', { keyFingerprint: k.key.fingerprint });
     this.d.logger.info(`Agent ${CORE_VERSION} starting`, { agentId: r.identity.agentId, serverId: r.identity.serverId, hostname: os.hostname() });
-    return { replaced: r.replaced };
+    return { replaced: r.replaced, keyReplaced: k.replaced };
   }
 
   get identity(): AgentIdentity {
     if (!this.identityValue) throw new Error('Agent identity is not loaded');
     return this.identityValue;
+  }
+
+  get key(): AgentKey {
+    if (!this.keyValue) throw new Error('Agent key is not loaded');
+    return this.keyValue;
+  }
+
+  /** Adopts the server id a Manager assigned (ADR-003). */
+  adoptServerId(serverId: string) {
+    this.identityValue = this.store.setServerId(this.identity, serverId);
   }
 
   setState(state: AgentState) {
@@ -123,6 +148,8 @@ export class AgentService {
       uptimeSeconds: Math.round((Date.now() - this.startedAt) / 1000),
       capabilities: deriveCapabilities(modules),
       modules,
+      keyFingerprint: this.key.fingerprint,
+      manager: this.d.link?.() ?? NO_LINK,
     };
   }
 }

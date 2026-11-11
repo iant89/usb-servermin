@@ -103,6 +103,18 @@ as the core, through the `HttpHost` and `GatewayHost` interfaces, with its own r
 (`manager/src/routes.ts`), its own schema (`MANAGER_MIGRATIONS`: the shared account, audit and
 key-value tables plus `servers`) and no module runtime, process service or update service.
 
+## Agent/Manager protocol
+
+`packages/protocol` holds the message envelope, the validation of everything received, version
+negotiation and the bytes an agent signs; both ends import it
+([ADR-002](adr/ADR-002-agent-outbound-connection.md)).
+
+| Side | File | Role |
+| --- | --- | --- |
+| Agent | `core/src/agent/manager-link.ts` | Dials out, verifies the certificate, authenticates, heartbeats, reconnects with backoff |
+| Agent | `core/src/agent/agent-key.ts` | The Ed25519 key pair |
+| Manager | `manager/src/agent-hub.ts` | Accepts agents, verifies them, derives server state, enforces limits |
+
 ## Agent
 
 Every server is a Servermin agent, whether or not a Manager exists
@@ -115,7 +127,10 @@ the HTTP server listens and answers `GET /api/v1/agent` (any signed-in user):
   "os": { "name": "Ubuntu 24.04.5 LTS", "id": "ubuntu", "version": "24.04", "kernel": "…", "arch": "x64" },
   "version": "1.0.0", "state": "RUNNING", "health": "HEALTHY", "startedAt": "…", "uptimeSeconds": 42,
   "capabilities": ["docker", "docker.engine", "storage"],
-  "modules": [{ "id": "docker", "version": "1.1.0", "state": "ACTIVE", "health": "HEALTHY", "provides": ["docker.engine"], "tags": ["containers"] }] }
+  "modules": [{ "id": "docker", "version": "1.1.0", "state": "ACTIVE", "health": "HEALTHY", "provides": ["docker.engine"], "tags": ["containers"] }],
+  "keyFingerprint": "2df27bd2…",
+  "manager": { "configured": true, "url": "wss://manager:8480/api/v1/agents/ws", "state": "CONNECTED", "connectedSince": "…",
+               "lastError": null, "attempts": 0, "nextAttemptAt": null, "protocolVersion": 1 } }
 ```
 
 - `state` is `STARTING` until modules have initialised, then `RUNNING`, and `STOPPING` during shutdown.

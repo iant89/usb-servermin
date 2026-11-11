@@ -3,17 +3,18 @@
 Working memory for the Servermin transformation. Read this first in a new session, then
 [roadmap.md](roadmap.md). Updated at the end of every phase.
 
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 
 ## Current phase
 
-Phase 3 — Agent/Manager protocol (not started).
+Phase 4 — Server registration (not started).
 
 ## Completed phases
 
 - Phase 0 — Architecture audit (2026-11-10)
 - Phase 1 — Agent foundation (2026-11-10)
 - Phase 2 — Manager foundation (2026-11-10)
+- Phase 3 — Agent/Manager protocol (2026-11-11)
 
 ## Active work
 
@@ -27,7 +28,6 @@ Nothing.
 
 | Decision | Default | Record |
 | --- | --- | --- |
-| Manager TLS trust: pinned self-signed by default, own certificate supported | Yes, in Phase 3 | ADR-002, to be written |
 | Rename the repository | Owner's call; nothing depends on it | |
 | When to make `servermin-agent.service` the unit file and `server-control.service` the alias | Not before the release after the one that ships Phase 1 | [target-state §10](architecture/target-state.md#10-naming) |
 
@@ -35,6 +35,9 @@ Nothing.
 
 - [ADR-001](adr/ADR-001-manager-agent-architecture.md) (Accepted): the Agent is the existing core
   plus a manager link; the Manager is a new process reusing core libraries.
+- [ADR-002](adr/ADR-002-agent-outbound-connection.md) (Accepted): agents dial out over a WebSocket;
+  TLS with a pinned fingerprint by default; Ed25519 challenge-response bound to the certificate;
+  server state derived from the connection.
 - [ADR-003](adr/ADR-003-server-identity.md) (Accepted): two random UUIDs (agent id, server id)
   stored with the data; hostname, machine id and hardware are attributes; ids are not secrets.
 - Phase 1, unit naming: alias instead of rename, because the installed release's updater performs
@@ -42,6 +45,16 @@ Nothing.
 - Phase 1, capabilities: a flat, derived list of module ids and provided services from modules
   that are `ACTIVE` and not `ERROR`/`OFFLINE`; manifest `capabilities` tags are reported per module
   as `tags` and left for Phase 9 to formalise.
+
+## What Phase 3 added
+
+- `packages/protocol`: envelope, validation, version negotiation, signing input.
+- Agent: `agent/agent-key.ts`, `agent/manager-link.ts`, `agent.manager` configuration,
+  `keyFingerprint` and `manager` in the agent report, `servermin-agent key`.
+- Manager: `agent-hub.ts`, `agents` table (migration 2), enrol/revoke endpoints, server states
+  from connections, `agents.*` configuration, certificate fingerprint in `GET /api/v1/manager`.
+- Installer: self-signed certificate and TLS configuration for a new Manager.
+- Core: `GatewayHost.otherUpgrade` so one HTTP server can carry both WebSocket endpoints.
 
 ## What Phase 2 added
 
@@ -82,7 +95,9 @@ From Phase 1:
 8. `servermin-agent status` without API credentials cannot list capabilities and needs root. A
    local, credential-free channel to the running agent will be needed for
    `servermin-agent register` (Phase 4) and should replace this fallback.
-9. A cloned data directory duplicates the identity; detection belongs to the protocol (Phase 3).
+9. A cloned data directory duplicates the identity (and now the key). The Manager keeps one
+   connection per agent and audits a second live one from another address as a possible clone;
+   two clones behind one address take turns unnoticed.
 10. If a 1.0.0 server rolls back from this release and is later upgraded again after a reboot, the
     state is consistent (verified), but the leftover `servermin-agent.service` link points at the
     1.0.0 unit until the next successful install recreates it. Harmless.
@@ -95,9 +110,23 @@ From Phase 2:
     second Manager migration ships (Phase 19 at the latest).
 13. The Manager's health is not part of the updater's health check; a release whose Manager fails
     to start is not rolled back.
-14. Without TLS the Manager serves passwords in clear text, like the agent. Phase 3 must make TLS
-    the default for the Manager.
+14. Resolved in Phase 3 for new Manager installs (certificate created by the installer). The
+    agent's own local interface still has no TLS by default.
 15. `servermin-verify` does not check a Manager installation.
+
+From Phase 3:
+
+16. `agent.manager` lives in the root-owned `/etc/servermin/config.json` and needs a restart to
+    change. `servermin-agent register` (Phase 4) needs a place the agent can be told at runtime;
+    together with issue 8 this is the first design question of Phase 4.
+17. A reverse proxy that terminates TLS in front of the Manager breaks the certificate binding of
+    agent authentication. Not supported.
+18. Replacing the Manager's certificate means touching every agent. No rotation mechanism yet
+    (roadmap Phase 37).
+19. Each heartbeat writes `last_seen_at` (every 15 s per agent).
+20. The Manager's connection events (`agent.connected`, `agent.disconnected`) are only logged and
+    put on the in-memory bus; a persistent event store is Phase 20.
+21. `servermin-verify` checks neither the Manager nor the agent's link to one.
 
 ## Technical debt
 
@@ -114,27 +143,35 @@ From Phase 2:
 
 ## Test status
 
-2026-11-10, end of Phase 2: `npm run typecheck` clean, `npm run build` clean, `npm test`
-33 files / 309 tests passing (Node.js 22.23.4). Added in Phase 2: `packages/core/test/schema.test.ts`
-(the refactored schema equals the 1.0.0 one), `packages/manager/test/manager.test.ts`,
-`tests/integration/manager.test.ts` (independent start, setup token, inventory CRUD and audit,
-persistence across restart, permissions, CSRF/token/lockout, cookie separation from an agent,
-WebSocket, the built program's exit codes, and that it contains no process-spawning code).
+2026-11-11, end of Phase 3: `npm run typecheck` clean, `npm run build` clean, `npm test`
+35 files / 387 tests passing (Node.js 22.23.4); the protocol tests were run repeatedly to look for
+timing-dependent failures (one found and fixed in the Manager's close handling). Added:
+`packages/protocol/test/protocol.test.ts`, key and settings tests in `packages/core/test/agent.test.ts`,
+and `tests/integration/protocol.test.ts`: a real agent against a real Manager (enrol, connect,
+Manager restart, revoke, removal, server-id adoption, degraded state); raw clients against the
+Manager (wrong key, unknown agent, replayed signature, wrong server id, nothing before
+authentication, silent connection, version mismatch, browser, stalled heartbeats, malformed,
+binary, oversized, flood, duplicate); the agent link against misbehaving Managers (no answer, not
+a Manager, rubbish, no common version, no heartbeat acknowledgements, connection cut mid-frame,
+accepted then dropped); TLS (pinned, wrong pin, untrusted, CA file, proof made for another
+certificate); and two real processes with `kill -9` in both directions. That last test takes
+about 35 s because an agent that was refused waits 30 s before trying again.
+
+By hand, on a real installation in a container: Manager installed with its generated certificate
+and serving HTTPS only, agent pinned to it, enrolled with the output of `servermin-agent key`,
+reconnected within seconds of a `kill -9` and restart of the Manager, `OFFLINE` when stopped.
+Still not exercised: anything under a running systemd.
 
 ## Next phase
 
-Phase 3 — Agent/Manager protocol. Plan:
+Phase 4 — Server registration. Enrolment by hand already works; Phase 4 replaces the copying:
 
-1. ADR-002: transport (WebSocket over TLS, opened by the agent), trust (pinned Manager
-   certificate by default), message envelope, version negotiation.
-2. `packages/protocol`: message types and validation shared by both sides.
-3. Agent link in `packages/core/src/agent/`: connect, authenticate, heartbeat, timeout, jittered
-   backoff, connection state; `agent.manager` configuration.
-4. Manager endpoint for agents, separate from the browser WebSocket; server state from the
-   connection (`ONLINE`, `STALE`, `OFFLINE`); duplicate agent id detection.
-5. Tests with real processes: kill the Manager, drop the socket mid-message, stall heartbeats,
-   malformed and oversized frames.
-
-Authentication of agents needs credentials that only registration (Phase 4) issues. Phase 3 should
-therefore define and test the authentication handshake against a key enrolled directly in the
-Manager database by the test, and Phase 4 adds the registration flow that enrols it.
+1. Decide how a root CLI talks to the running agent (issues 8 and 16): the candidate is a Unix
+   socket in the agent's state directory, authorised by file permissions.
+2. Registration codes in the Manager: one-time, expiring, stored hashed, carrying or accompanied
+   by the Manager's URL and certificate fingerprint.
+3. `sudo servermin-agent register CODE`: the agent presents the code with its ids and public key
+   over a connection that is trusted by the fingerprint; the Manager creates a pending server.
+4. Approval in the Manager, then the agent connects as in Phase 3. Audit of every step.
+5. Tests: reuse, expiry, wrong code rate limiting, a code used against another Manager, approval
+   refused, and the unchanged Phase 3 properties for a server enrolled this way.

@@ -65,6 +65,17 @@ export interface CoreConfig {
      * travels with the data. Point it at a disk of the machine to tie the identity to the machine.
      */
     stateDir: string | null;
+    /** The Servermin Manager this agent reports to. Without a `url` the server is standalone. */
+    manager: {
+      /** `https://manager:8480` (or `wss://`). Plain `http://`/`ws://` needs `insecure: true`. */
+      url: string | null;
+      /** SHA-256 fingerprint of the Manager's certificate: accept exactly that certificate (self-signed included). */
+      fingerprint: string | null;
+      /** PEM file of the CA that signed the Manager's certificate, when it is neither public nor pinned. */
+      ca: string | null;
+      /** Allow a connection without TLS. Only for a Manager on the same machine or a network you fully trust. */
+      insecure: boolean;
+    };
   };
   /** Updates from signed GitHub releases. Only settable in the file: where updates come from is not a runtime setting. */
   updates: {
@@ -102,7 +113,7 @@ export function defaultConfig(base = '/'): CoreConfig {
     privileged: { mode: 'sudo', helper: p('usr/lib/servermin/servermin-privileged') },
     logging: { level: 'INFO', retentionDays: 14, stdout: true, file: false },
     auth: { sessionHours: 12, secureCookies: 'auto', loginAttempts: 5, lockoutMinutes: 15 },
-    agent: { stateDir: null },
+    agent: { stateDir: null, manager: { url: null, fingerprint: null, ca: null, insecure: false } },
     updates: { enabled: true, repository: 'iant89/usb-servermin', apiBase: 'https://api.github.com', checkIntervalHours: 24 },
     dev: false,
   };
@@ -159,6 +170,21 @@ export function validateConfig(config: CoreConfig): CoreConfig {
   if (!['sudo', 'simulate', 'disabled'].includes(config.privileged.mode)) problems.push('privileged.mode must be sudo, simulate or disabled');
   if (!['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(config.logging.level)) problems.push('logging.level is invalid');
   if (config.agent.stateDir !== null && (typeof config.agent.stateDir !== 'string' || !isAbsolute(config.agent.stateDir))) problems.push('agent.stateDir must be an absolute path or null');
+  const m = config.agent.manager;
+  if (m.url !== null) {
+    let url: URL | null = null;
+    try {
+      url = new URL(m.url);
+    } catch {
+      /* reported below */
+    }
+    if (!url || !['https:', 'wss:', 'http:', 'ws:'].includes(url.protocol) || !url.hostname) problems.push('agent.manager.url must be an https:// or wss:// URL');
+    else if (url.username || url.password) problems.push('agent.manager.url must not contain credentials');
+    else if (['http:', 'ws:'].includes(url.protocol) && m.insecure !== true) problems.push('agent.manager.url is not encrypted; use https:// (or set agent.manager.insecure to true on a network you fully trust)');
+    if (m.fingerprint !== null && (typeof m.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(m.fingerprint.replace(/^sha-?256[:=]/i, '').replace(/[:\s]/g, '').toLowerCase())))
+      problems.push('agent.manager.fingerprint must be a SHA-256 certificate fingerprint (64 hex digits)');
+    if (m.ca !== null && (typeof m.ca !== 'string' || !isAbsolute(m.ca))) problems.push('agent.manager.ca must be an absolute path');
+  }
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.updates.repository)) problems.push('updates.repository must be owner/name');
   if (!/^https?:\/\//.test(config.updates.apiBase)) problems.push('updates.apiBase must be an http(s) URL');
   if (!(config.updates.checkIntervalHours >= 1)) problems.push('updates.checkIntervalHours must be at least 1');

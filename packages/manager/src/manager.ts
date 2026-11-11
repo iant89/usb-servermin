@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync } from 'node:fs';
+import { X509Certificate } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { HealthStatus } from '@servermin/sdk';
 import {
@@ -18,12 +19,16 @@ import {
   type CoreChannel,
   type ErrorResponse,
 } from '@servermin/core';
+import { AgentHub } from './agent-hub';
 import type { ManagerConfig } from './config';
-import { INVENTORY_SCHEMA, Inventory, InventoryError } from './inventory';
+import { AGENTS_SCHEMA, INVENTORY_SCHEMA, Inventory, InventoryError } from './inventory';
 import { MANAGER_SESSION_COOKIE, registerManagerRoutes } from './routes';
 
 /** Numbered like the core's: applied migrations are recorded and never re-run. */
-export const MANAGER_MIGRATIONS = [{ version: 1, name: 'manager schema', sql: ACCOUNT_SCHEMA + AUDIT_SCHEMA + KV_SCHEMA + INVENTORY_SCHEMA }];
+export const MANAGER_MIGRATIONS = [
+  { version: 1, name: 'manager schema', sql: ACCOUNT_SCHEMA + AUDIT_SCHEMA + KV_SCHEMA + INVENTORY_SCHEMA },
+  { version: 2, name: 'agents', sql: AGENTS_SCHEMA },
+];
 
 function mapError(e: unknown): ErrorResponse | undefined {
   if (e instanceof InventoryError) return { status: e.status, body: { error: e.message } };
@@ -46,6 +51,9 @@ export class Manager {
   setupToken!: SetupToken;
   http!: HttpServer;
   gateway!: WebSocketGateway;
+  agents!: AgentHub;
+  /** SHA-256 of the TLS certificate (lower-case hex), or '' without TLS. Agents pin it. */
+  tlsFingerprint = '';
   address: { port: number; host: string } | null = null;
   private startedAt = Date.now();
   private log;
@@ -69,6 +77,7 @@ export class Manager {
     this.audit = new AuditLog(this.db);
     this.auth = new AuthService(this.db, this.config.auth);
     this.inventory = new Inventory(this.db, this.bus);
+    this.inventory.resetConnectionStates();
     this.setupToken = new SetupToken(join(data, 'setup-token'));
     if (this.auth.userCount() === 0) {
       const token = this.setupToken.ensure();
@@ -87,7 +96,24 @@ export class Manager {
       registerRoutes: (router) => registerManagerRoutes(router, this),
       mapError,
     });
-    this.gateway = new WebSocketGateway({ logs: this.logs, auth: this.auth, hub: this.hub, channels: this.channels() }, this.http);
+    const tls = this.config.http.tls;
+    if (tls) this.tlsFingerprint = new X509Certificate(readFileSync(tls.cert)).fingerprint256.replace(/:/g, '').toLowerCase();
+    else this.log.warn('TLS is not configured: passwords, sessions and agent traffic are not encrypted. Agents will only connect if told to accept that.');
+    this.agents = new AgentHub({
+      inventory: this.inventory,
+      audit: this.audit,
+      bus: this.bus,
+      logger: this.logs.logger('agents'),
+      heartbeatMs: Math.round(this.config.agents.heartbeatSeconds * 1000),
+      timeoutMs: Math.round(this.config.agents.timeoutSeconds * 1000),
+      handshakeMs: Math.round(this.config.agents.handshakeSeconds * 1000),
+      tlsFingerprint: this.tlsFingerprint,
+      clientIp: (req) => (this.config.http.trustProxy && typeof req.headers['x-forwarded-for'] === 'string' ? req.headers['x-forwarded-for'].split(',')[0].trim() : (req.socket.remoteAddress ?? 'unknown')),
+    });
+    this.gateway = new WebSocketGateway(
+      { logs: this.logs, auth: this.auth, hub: this.hub, channels: this.channels(), otherUpgrade: (req, socket, head) => this.agents.handleUpgrade(req, socket, head) },
+      this.http,
+    );
     this.address = await this.http.listen();
     this.startedAt = Date.now();
     this.log.info(`Listening on ${this.config.http.tls ? 'https' : 'http'}://${this.address.host}:${this.address.port}`, { servers: this.inventory.count().total });
@@ -117,6 +143,7 @@ export class Manager {
 
   async stop() {
     this.log.info('Shutting down');
+    this.agents?.close();
     this.gateway?.close();
     await this.http?.close();
     await this.logs.close();

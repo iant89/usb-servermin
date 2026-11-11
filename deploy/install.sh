@@ -138,6 +138,30 @@ if [[ $MANAGER -eq 1 || -f "$MANAGER_UNIT" ]]; then
   id servermin-manager >/dev/null 2>&1 || useradd --system --gid servermin-manager --home-dir /var/lib/servermin-manager --no-create-home --shell /usr/sbin/nologin --comment "Servermin Manager" servermin-manager
   install -d -m 750 -o root -g servermin-manager /etc/servermin-manager
   install -d -m 700 -o servermin-manager -g servermin-manager /var/lib/servermin-manager
+  # A new Manager gets a self-signed certificate, so agents and browsers never talk to it in clear
+  # text. Agents trust it by its fingerprint (printed below). Replace it with your own any time.
+  # Only on a first install: an existing Manager keeps the address its agents and users know.
+  MANAGER_NEW=0; [[ -f "$MANAGER_UNIT" ]] || MANAGER_NEW=1
+  if [[ $MANAGER_NEW -eq 0 || -f /etc/servermin-manager/config.json ]]; then
+    :
+  elif command -v openssl >/dev/null; then
+    if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+        -subj "/CN=$(hostname -f 2>/dev/null || hostname)" \
+        -addext "subjectAltName=DNS:$(hostname),DNS:$(hostname -f 2>/dev/null || hostname),DNS:localhost,IP:127.0.0.1" \
+        -keyout /etc/servermin-manager/tls.key -out /etc/servermin-manager/tls.crt >/dev/null 2>&1; then
+      chown root:servermin-manager /etc/servermin-manager/tls.key /etc/servermin-manager/tls.crt
+      chmod 640 /etc/servermin-manager/tls.key
+      chmod 644 /etc/servermin-manager/tls.crt
+      printf '{\n  "http": { "tls": { "cert": "/etc/servermin-manager/tls.crt", "key": "/etc/servermin-manager/tls.key" } }\n}\n' > /etc/servermin-manager/config.json
+      chown root:servermin-manager /etc/servermin-manager/config.json
+      chmod 640 /etc/servermin-manager/config.json
+    else
+      rm -f /etc/servermin-manager/tls.key /etc/servermin-manager/tls.crt
+      echo "Could not create a TLS certificate for the Manager; it will run WITHOUT encryption until http.tls is configured." >&2
+    fi
+  else
+    echo "openssl is not installed: the Manager will run WITHOUT encryption until http.tls is configured (apt-get install -y openssl, then see docs/manager.md)." >&2
+  fi
   install -m 644 "$SRC/deploy/servermin-manager.service" "$MANAGER_UNIT"
   systemctl daemon-reload
   if [[ $MANAGER -eq 1 ]]; then systemctl enable --now servermin-manager.service; else systemctl try-restart servermin-manager.service; fi
@@ -150,8 +174,10 @@ echo "This server's identity:  sudo servermin-agent status"
 echo "Check the installation:   sudo servermin-verify"
 sleep 2
 if [[ $MANAGER -eq 1 ]]; then
-  MPORT="$("$NODE" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("/etc/servermin-manager/config.json")).http.port??8480))}catch{process.stdout.write("8480")}')"
-  echo "Servermin Manager:        systemctl status servermin-manager   (http://$(hostname -I | awk '{print $1}'):$MPORT/api/v1/health)"
+  MINFO="$("$NODE" -e 'let c={};try{c=JSON.parse(require("fs").readFileSync("/etc/servermin-manager/config.json"))}catch{};const t=c.http&&c.http.tls;let f="";try{if(t)f=new (require("crypto").X509Certificate)(require("fs").readFileSync(t.cert)).fingerprint256}catch{};process.stdout.write((t?"https":"http")+" "+((c.http&&c.http.port)||8480)+" "+f)')"
+  read -r MSCHEME MPORT MFP <<< "$MINFO"
+  echo "Servermin Manager:        systemctl status servermin-manager   ($MSCHEME://$(hostname -I | awk '{print $1}'):$MPORT/api/v1/health)"
+  [[ -n "$MFP" ]] && echo "Manager certificate:      $MFP   (agents pin this as agent.manager.fingerprint)"
   [[ -f /var/lib/servermin-manager/setup-token ]] && echo "Manager setup token:      $(cat /var/lib/servermin-manager/setup-token)"
 fi
 if [[ -f /var/lib/servermin/setup-token ]]; then
