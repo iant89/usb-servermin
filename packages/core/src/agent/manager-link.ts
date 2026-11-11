@@ -23,6 +23,8 @@ export interface LinkStatus {
   attempts: number;
   nextAttemptAt: string | null;
   protocolVersion: number | null;
+  /** Where the settings came from: `agent.manager` in the configuration file, or a registration (ADR-004). */
+  source?: 'config' | 'registration' | null;
 }
 
 export interface ManagerLinkOptions {

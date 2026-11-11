@@ -3,8 +3,15 @@
  *
  *   servermin-agent status [--json]    identity, version, state and capabilities
  *   servermin-agent id                 print the server id and the agent id
+  servermin-agent key [--json]       ids and public key, to enrol this agent by hand
+  sudo servermin-agent register CODE --manager https://manager:8480 --fingerprint SHA256
+                                     join a Manager; the Manager prints this command with the code
+  sudo servermin-agent leave         forget the registration and run standalone
   servermin-agent key [--json]       what a Manager needs to enrol this agent: ids and public key
  *   servermin-agent key [--json]       what a Manager needs to enrol this agent: ids and public key
+ *   servermin-agent register CODE --manager URL [--fingerprint SHA256 | --ca FILE | --insecure] [--name NAME]
+ *                                      join a Manager with a registration code (ADR-004)
+ *   servermin-agent leave              forget the registration; the server runs standalone
  *
  * With API credentials (`serverctl login`, or SERVERCTL_URL and SERVERCTL_TOKEN) the running agent
  * answers. Without them, run it with sudo: the identity is read from the agent's state directory
@@ -16,6 +23,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
+import { leave, readRegistration, register } from './register';
 
 const USAGE = `servermin-agent — inspects the Servermin agent on this server.
 
@@ -112,9 +120,10 @@ export function fromDisk(env: NodeJS.ProcessEnv = process.env): LocalStatus {
     /* an agent from before keys existed, or not started since the update */
   }
   const keyFingerprint = publicKey ? createHash('sha256').update(Buffer.from(publicKey, 'base64')).digest('hex') : undefined;
-  const mc = config.agent?.manager;
-  // From disk only the configuration is known, not whether the connection is up.
-  const manager = { configured: !!mc?.url, url: mc?.url ?? null, state: mc?.url ? 'UNKNOWN' : 'DISABLED', connectedSince: null, lastError: null, attempts: 0, nextAttemptAt: null };
+  // The configuration file wins over a registration, as in the running agent.
+  const url = config.agent?.manager?.url || readRegistration(stateDir)?.url || null;
+  // From disk only the settings are known, not whether the connection is up.
+  const manager = { configured: !!url, url, state: url ? 'UNKNOWN' : 'DISABLED', connectedSince: null, lastError: null, attempts: 0, nextAttemptAt: null };
   return { source: 'disk', serverId: identity.serverId, agentId: identity.agentId, hostname: hostname(), version, state, publicKey, keyFingerprint, manager };
 }
 
@@ -163,6 +172,8 @@ export async function run(args: string[]) {
     if (args.includes('--json')) return void process.stdout.write(JSON.stringify(enrol, null, 2) + '\n');
     return void process.stdout.write(`Server ID    ${enrol.serverId}\nAgent ID     ${enrol.agentId}\nPublic key   ${enrol.publicKey}\nFingerprint  SHA256:${enrol.keyFingerprint}\n\nThe public key is not a secret. Give these to the Manager to enrol this agent.\n`);
   }
+  if (cmd === 'register') return void process.stdout.write(await register(args.slice(1)));
+  if (cmd === 'leave') return void process.stdout.write(leave());
   if (cmd === 'id') {
     const s = await status();
     return void process.stdout.write(`${s.serverId}\n${s.agentId}\n`);

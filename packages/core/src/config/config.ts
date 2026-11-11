@@ -163,6 +163,64 @@ export function agentStateDir(config: CoreConfig): string {
   return config.agent.stateDir ?? join(config.paths.data, 'agent');
 }
 
+export type ManagerSettings = CoreConfig['agent']['manager'];
+
+/** Checks Manager connection settings, from the configuration file or from a registration. */
+export function validateManagerSettings(m: ManagerSettings, prefix: string): string[] {
+  const problems: string[] = [];
+  if (!m || typeof m !== 'object') return [`${prefix} must be an object`];
+  if (m.url !== null) {
+    let url: URL | null = null;
+    try {
+      url = typeof m.url === 'string' ? new URL(m.url) : null;
+    } catch {
+      /* reported below */
+    }
+    if (!url || !['https:', 'wss:', 'http:', 'ws:'].includes(url.protocol) || !url.hostname) problems.push(`${prefix}.url must be an https:// or wss:// URL`);
+    else if (url.username || url.password) problems.push(`${prefix}.url must not contain credentials`);
+    else if (['http:', 'ws:'].includes(url.protocol) && m.insecure !== true) problems.push(`${prefix}.url is not encrypted; use https:// (or set ${prefix}.insecure to true on a network you fully trust)`);
+    if (m.fingerprint !== null && (typeof m.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(m.fingerprint.replace(/^sha-?256[:=]/i, '').replace(/[:\s]/g, '').toLowerCase())))
+      problems.push(`${prefix}.fingerprint must be a SHA-256 certificate fingerprint (64 hex digits)`);
+    if (m.ca !== null && (typeof m.ca !== 'string' || !isAbsolute(m.ca))) problems.push(`${prefix}.ca must be an absolute path`);
+  }
+  return problems;
+}
+
+/** Written by `servermin-agent register` into the agent state directory (ADR-004). */
+export const REGISTRATION_FILE = 'manager.json';
+
+export interface RegisteredManager extends ManagerSettings {
+  registeredAt: string;
+  registrationId: string;
+}
+
+/**
+ * The Manager this agent registered with, from `<stateDir>/manager.json`. Returns null when there
+ * is none, and the problem when the file exists but cannot be used (the agent then stays standalone
+ * and says why).
+ */
+export function readRegisteredManager(stateDir: string): { manager: RegisteredManager | null; problem?: string } {
+  const file = join(stateDir, REGISTRATION_FILE);
+  if (!existsSync(file)) return { manager: null };
+  let raw: any;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (e) {
+    return { manager: null, problem: `${file} is not valid JSON: ${(e as Error).message}` };
+  }
+  const m: RegisteredManager = {
+    url: typeof raw?.url === 'string' ? raw.url : null,
+    fingerprint: typeof raw?.fingerprint === 'string' ? raw.fingerprint : null,
+    ca: typeof raw?.ca === 'string' ? raw.ca : null,
+    insecure: raw?.insecure === true,
+    registeredAt: String(raw?.registeredAt ?? ''),
+    registrationId: String(raw?.registrationId ?? ''),
+  };
+  if (!m.url) return { manager: null, problem: `${file} names no Manager url` };
+  const problems = validateManagerSettings(m, REGISTRATION_FILE);
+  return problems.length ? { manager: null, problem: problems.join('; ') } : { manager: m };
+}
+
 export function validateConfig(config: CoreConfig): CoreConfig {
   const problems: string[] = [];
   if (!Number.isInteger(config.http.port) || config.http.port < 0 || config.http.port > 65535) problems.push('http.port must be 0-65535');
@@ -170,21 +228,7 @@ export function validateConfig(config: CoreConfig): CoreConfig {
   if (!['sudo', 'simulate', 'disabled'].includes(config.privileged.mode)) problems.push('privileged.mode must be sudo, simulate or disabled');
   if (!['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(config.logging.level)) problems.push('logging.level is invalid');
   if (config.agent.stateDir !== null && (typeof config.agent.stateDir !== 'string' || !isAbsolute(config.agent.stateDir))) problems.push('agent.stateDir must be an absolute path or null');
-  const m = config.agent.manager;
-  if (m.url !== null) {
-    let url: URL | null = null;
-    try {
-      url = new URL(m.url);
-    } catch {
-      /* reported below */
-    }
-    if (!url || !['https:', 'wss:', 'http:', 'ws:'].includes(url.protocol) || !url.hostname) problems.push('agent.manager.url must be an https:// or wss:// URL');
-    else if (url.username || url.password) problems.push('agent.manager.url must not contain credentials');
-    else if (['http:', 'ws:'].includes(url.protocol) && m.insecure !== true) problems.push('agent.manager.url is not encrypted; use https:// (or set agent.manager.insecure to true on a network you fully trust)');
-    if (m.fingerprint !== null && (typeof m.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(m.fingerprint.replace(/^sha-?256[:=]/i, '').replace(/[:\s]/g, '').toLowerCase())))
-      problems.push('agent.manager.fingerprint must be a SHA-256 certificate fingerprint (64 hex digits)');
-    if (m.ca !== null && (typeof m.ca !== 'string' || !isAbsolute(m.ca))) problems.push('agent.manager.ca must be an absolute path');
-  }
+  problems.push(...validateManagerSettings(config.agent.manager, 'agent.manager'));
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.updates.repository)) problems.push('updates.repository must be owner/name');
   if (!/^https?:\/\//.test(config.updates.apiBase)) problems.push('updates.apiBase must be an http(s) URL');
   if (!(config.updates.checkIntervalHours >= 1)) problems.push('updates.checkIntervalHours must be at least 1');

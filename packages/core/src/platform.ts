@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, unwatchFile, watchFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -8,7 +8,7 @@ import { ManagerLink, type ManagerLinkOptions } from './agent/manager-link';
 import { AuditLog } from './audit/audit';
 import { AuthService } from './auth/auth-service';
 import { SetupToken } from './auth/setup-token';
-import { agentStateDir, type CoreConfig } from './config/config';
+import { REGISTRATION_FILE, agentStateDir, readRegisteredManager, type CoreConfig, type ManagerSettings } from './config/config';
 import { CORE_MIGRATIONS, Database } from './database/database';
 import { EventBus } from './events/event-bus';
 import { SESSION_COOKIE, registerCoreRoutes, type PlatformSettings } from './http/api';
@@ -43,6 +43,8 @@ export interface PlatformOptions {
   storageScript?: string;
   /** Test only: delay added to every write on the storage thread, to simulate slow media. */
   storageWriteDelayMs?: number;
+  /** Test only: how often the registration file is checked for changes (default 2 s). */
+  registrationPollMs?: number;
   /** Test only: reconnect pacing of the Manager link. */
   linkBackoff?: ManagerLinkOptions['backoff'];
 }
@@ -65,6 +67,10 @@ export class Platform {
   updates!: UpdateService;
   agent!: AgentService;
   link!: ManagerLink;
+  /** Where the Manager settings in use came from: the configuration file wins over a registration. */
+  linkSource: 'config' | 'registration' | null = null;
+  private linkKey = '';
+  private registrationFile = '';
   setupToken!: SetupToken;
   http!: HttpServer;
   gateway!: WebSocketGateway;
@@ -128,7 +134,7 @@ export class Platform {
       modules: () => this.modules.list().map((m) => ({ id: m.id, version: m.version, state: m.state, health: m.health.status, provides: m.provides, tags: m.capabilities })),
       health: () => this.health().status,
       serverName: () => this.settings().serverName,
-      link: () => this.link.status(),
+      link: () => ({ ...this.link.status(), source: this.linkSource }),
     });
     const { replaced, keyReplaced } = this.agent.start();
     if (replaced)
@@ -145,22 +151,8 @@ export class Platform {
         tone: 'error',
         permission: 'platform.config',
       });
-    const mc = this.config.agent.manager;
-    this.link = new ManagerLink({
-      url: mc.url,
-      fingerprint: mc.fingerprint,
-      caFile: mc.ca,
-      identity: () => this.agent.identity,
-      key: this.agent.key,
-      serverState: async () => {
-        const r = await this.agent.report();
-        return { name: r.name, hostname: r.hostname, agentVersion: r.version, os: r.os.name, health: r.health, state: r.state };
-      },
-      capabilities: () => this.agent.capabilities(),
-      adoptServerId: (id) => this.agent.adoptServerId(id),
-      logger: this.logs.logger('agent'),
-      backoff: this.options.linkBackoff,
-    });
+    this.registrationFile = join(agentStateDir(this.config), REGISTRATION_FILE);
+    this.link = this.buildLink();
     this.setupToken = new SetupToken(join(paths.data, 'setup-token'));
     this.ensureSetupToken();
 
@@ -189,6 +181,8 @@ export class Platform {
     this.agent.setState('RUNNING');
     // Last: the Manager hears from a server that is fully up, and a Manager that is down delays nothing.
     this.link.start();
+    // `servermin-agent register` (ADR-004) writes the registration file; pick it up without a restart.
+    if (this.linkSource !== 'config') watchFile(this.registrationFile, { interval: this.options.registrationPollMs ?? 2000 }, () => this.reloadLink());
     this.bus.subscribe('module.state.changed', () => this.link.notifyChanged(), 'core');
     this.bus.subscribe('module.health.changed', () => this.link.notifyChanged(), 'core');
     this.bus.subscribe('config.changed', () => this.link.notifyChanged(), 'core');
@@ -197,6 +191,52 @@ export class Platform {
     this.pruneTimer.unref();
     void this.logs.prune(this.config.logging.retentionDays);
     return this;
+  }
+
+  // ── Manager link (ADR-002, ADR-004) ──────────────────────────────────────────────
+
+  /** The Manager settings in effect: the configuration file if it names a Manager, else the registration. */
+  private managerSettings(): { settings: ManagerSettings; source: 'config' | 'registration' | null } {
+    const mc = this.config.agent.manager;
+    if (mc.url) return { settings: mc, source: 'config' };
+    const r = readRegisteredManager(agentStateDir(this.config));
+    if (r.problem) this.log.error(`Ignoring the Manager registration: ${r.problem}`);
+    if (!r.manager) return { settings: { url: null, fingerprint: null, ca: null, insecure: false }, source: null };
+    const { url, fingerprint, ca, insecure } = r.manager;
+    return { settings: { url, fingerprint, ca, insecure }, source: 'registration' };
+  }
+
+  private buildLink(): ManagerLink {
+    const { settings: mc, source } = this.managerSettings();
+    this.linkSource = source;
+    this.linkKey = JSON.stringify(mc);
+    return new ManagerLink({
+      url: mc.url,
+      fingerprint: mc.fingerprint,
+      caFile: mc.ca,
+      identity: () => this.agent.identity,
+      key: this.agent.key,
+      serverState: async () => {
+        const r = await this.agent.report();
+        return { name: r.name, hostname: r.hostname, agentVersion: r.version, os: r.os.name, health: r.health, state: r.state };
+      },
+      capabilities: () => this.agent.capabilities(),
+      adoptServerId: (id) => this.agent.adoptServerId(id),
+      logger: this.logs.logger('agent'),
+      backoff: this.options.linkBackoff,
+    });
+  }
+
+  /** Replaces the link when the registration changed: registered, moved to another Manager, or left. */
+  reloadLink() {
+    if (this.linkSource === 'config') return;
+    const { settings } = this.managerSettings();
+    if (JSON.stringify(settings) === this.linkKey) return;
+    this.log.info(settings.url ? `Manager registration changed: now ${settings.url}` : 'Manager registration removed: this server is standalone again');
+    this.link.stop();
+    this.link = this.buildLink();
+    this.link.start();
+    this.bus.publish('agent.manager.changed', { url: settings.url });
   }
 
   // ── First-run setup token ──────────────────────────────────────────────────────
@@ -257,6 +297,7 @@ export class Platform {
   async stop() {
     this.log.info('Shutting down');
     this.agent?.setState('STOPPING');
+    if (this.registrationFile) unwatchFile(this.registrationFile);
     this.link?.stop();
     if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.updates?.stop();
