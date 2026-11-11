@@ -34,6 +34,12 @@ const DATA = process.env.SERVERMIN_DATA ?? config.paths?.data ?? '/var/lib/serve
 const STATUS_FILE = join(DATA, 'update-status.json');
 const LOG_FILE = join(STATE, 'update.log');
 
+// The agent's unit. Releases up to now ship it as server-control.service (with
+// servermin-agent.service as an alias); a later release may ship it under the new name, and a
+// rollback can cross that change in either direction, so both are handled.
+const UNIT = 'servermin-agent.service';
+const LEGACY_UNIT = 'server-control.service';
+
 class UpdateError extends Error {}
 
 function log(message) {
@@ -185,27 +191,56 @@ function restoreDatabase(dir) {
   return true;
 }
 
+function stopAgent() {
+  // Both names: whichever one is not installed is simply "not loaded".
+  run(SYSTEMCTL, ['stop', UNIT, LEGACY_UNIT], { check: false });
+}
+
+/**
+ * Installs the unit that the release in `deploy` ships and returns its name. The other name is
+ * then either a unit file left by a release that used it, or an alias link; neither may stay,
+ * or two units could be enabled for the same server. Enabling recreates the alias the installed
+ * unit declares.
+ */
+function installUnit(deploy) {
+  const dir = join(SYSTEM_ROOT, 'etc/systemd/system');
+  const unit = existsSync(join(deploy, UNIT)) ? UNIT : LEGACY_UNIT;
+  if (!existsSync(join(deploy, unit))) return unit;
+  const otherName = unit === UNIT ? LEGACY_UNIT : UNIT;
+  const other = join(dir, otherName);
+  const stat = lstatSync(other, { throwIfNoEntry: false });
+  // Never "disable" an alias name: that would disable the unit it points to.
+  if (stat?.isFile()) run(SYSTEMCTL, ['disable', otherName], { check: false });
+  if (stat) rmSync(other, { force: true });
+  run('install', ['-m', '644', join(deploy, unit), join(dir, unit)], { check: false });
+  run(SYSTEMCTL, ['daemon-reload'], { check: false });
+  run(SYSTEMCTL, ['enable', unit], { check: false });
+  return unit;
+}
+
 /** Puts the previous installation back, with its privilege helper and unit, and starts it. */
 async function restorePrevious(fromVersion, reason) {
   const previous = `${APP}.previous`;
   if (!existsSync(previous)) throw new UpdateError(`Cannot roll back: ${previous} does not exist`);
   writeStatus({ state: 'rolling-back', reason });
   log(`Rolling back to ${fromVersion}: ${reason}`);
-  run(SYSTEMCTL, ['stop', 'server-control.service'], { check: false });
+  stopAgent();
   const failed = join(STATE, 'failed-release');
   rmSync(failed, { recursive: true, force: true });
   if (existsSync(APP)) renameSync(APP, failed);
   renameSync(previous, APP);
   const deploy = join(APP, 'deploy');
+  let unit = LEGACY_UNIT;
   if (existsSync(deploy)) {
     mkdirSync(join(SYSTEM_ROOT, 'usr/lib/servermin'), { recursive: true });
     mkdirSync(join(SYSTEM_ROOT, 'etc/systemd/system'), { recursive: true });
     run('install', ['-m', '755', join(deploy, 'servermin-privileged'), join(SYSTEM_ROOT, 'usr/lib/servermin/servermin-privileged')], { check: false });
-    run('install', ['-m', '644', join(deploy, 'server-control.service'), join(SYSTEM_ROOT, 'etc/systemd/system/server-control.service')], { check: false });
-    run(SYSTEMCTL, ['daemon-reload'], { check: false });
+    unit = installUnit(deploy);
   }
   restoreDatabase(join(STATE, `pre-update-${fromVersion}`));
-  run(SYSTEMCTL, ['start', 'server-control.service'], { check: false });
+  run(SYSTEMCTL, ['start', unit], { check: false });
+  // A Manager on this server runs from the same program directory: put it on the restored code too.
+  run(SYSTEMCTL, ['try-restart', 'servermin-manager.service'], { check: false });
   await waitHealthy(fromVersion);
 }
 
@@ -223,7 +258,7 @@ async function apply(manifestFile, signatureFile, archiveFile) {
     log(`Verified signed release ${to} (installed: ${from})`);
     writeStatus({ state: 'installing', from, to });
     const root = extract(archiveFile, to);
-    run(SYSTEMCTL, ['stop', 'server-control.service'], { check: false });
+    stopAgent();
     snapshotDatabase(from);
     installStarted = true;
     run('bash', [join(root, 'install.sh')], { timeout: 600_000 });

@@ -1,11 +1,13 @@
-# Server Control core platform (systemd unit, §39).
+# Servermin agent (systemd unit, §39): the core platform and its modules on this server.
+# Also reachable as servermin-agent.service (see Alias= below). The file keeps its original name
+# because the updater of every installed release reinstalls and starts it under that name.
 #
 # Runs as the unprivileged "servermin" account. Privileged operations go through
 # /usr/lib/servermin/servermin-privileged via a single sudoers rule, so sudo must keep working:
 # that is why NoNewPrivileges and a reduced capability bounding set are NOT used here.
 
 [Unit]
-Description=Server Control (modular server administration platform)
+Description=Servermin Agent (Server Control: modular server administration platform)
 Documentation=file:///opt/servermin/README.md
 After=network-online.target local-fs.target systemd-journald.socket
 Wants=network-online.target
@@ -38,3 +40,4 @@ SyslogIdentifier=server-control
 
 [Install]
 WantedBy=multi-user.target
+Alias=servermin-agent.service

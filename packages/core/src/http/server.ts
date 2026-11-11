@@ -4,15 +4,12 @@ import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { AUTHENTICATED, PUBLIC, hasPermission, type ModuleRequest } from '@servermin/sdk';
-import { AuthError } from '../auth/auth-service';
+import type { AuditLog } from '../audit/audit';
+import { AuthError, type AuthService } from '../auth/auth-service';
 import { TokenBucket } from '../auth/rate-limit';
-import { InstallError } from '../modules/installer';
-import { ModuleError } from '../modules/module-manager';
-import { RpcError } from '../modules/rpc';
-import { ProcessError } from '../process/process-service';
-import type { Platform } from '../platform';
-import { UpdateError } from '../updates/update-service';
-import { SESSION_COOKIE, registerCoreRoutes } from './api';
+import type { CoreConfig } from '../config/config';
+import type { LogService } from '../logging/logger';
+import type { ModuleManager } from '../modules/module-manager';
 import { Router } from './router';
 import { ApiError, clientIp, newRequestId, parseCookies, readJson, sendJson, sendRaw, type RequestContext } from './util';
 
@@ -46,16 +43,36 @@ function securityHeaders(res: ServerResponse, dev: boolean) {
   );
 }
 
-/** Maps any thrown error to an HTTP status and safe message. */
-export function errorStatus(e: unknown): { status: number; body: Record<string, unknown> } {
+export type ErrorResponse = { status: number; body: Record<string, unknown> };
+
+/**
+ * What the HTTP server needs from the service it serves. The agent's `Platform` and the Manager
+ * both provide one, so the request pipeline (authentication, CSRF, rate limiting, security
+ * headers, error mapping) is the same code in both.
+ */
+export interface HttpHost {
+  logs: Pick<LogService, 'logger'>;
+  auth: AuthService;
+  audit: AuditLog;
+  http: CoreConfig['http'];
+  /** Relaxed CSP for a development server. */
+  dev: boolean;
+  /** Name of the session cookie. */
+  sessionCookie: string;
+  /** Directory of the built web interface, or null when the service has none. */
+  shellDir: string | null;
+  /** Module routes and assets; absent on a service that runs no modules. */
+  modules?: Pick<ModuleManager, 'get'>;
+  registerRoutes(router: Router): void;
+  /** Maps the service's own error types to a status and a message that is safe to show. */
+  mapError?(e: unknown): ErrorResponse | undefined;
+}
+
+/** Maps any thrown error to an HTTP status and safe message. Unknown errors never leak their text. */
+export function errorStatus(e: unknown, mapError?: HttpHost['mapError']): ErrorResponse {
   if (e instanceof ApiError) return { status: e.status, body: { error: e.message, details: e.details } };
   if (e instanceof AuthError) return { status: e.status, body: { error: e.message } };
-  if (e instanceof ModuleError) return { status: e.status, body: { error: e.message, problems: e.problems } };
-  if (e instanceof InstallError) return { status: e.status, body: { error: e.message, problems: e.problems } };
-  if (e instanceof ProcessError) return { status: e.status, body: { error: e.message } };
-  if (e instanceof UpdateError) return { status: e.status, body: { error: e.message } };
-  if (e instanceof RpcError) return { status: e.status ?? 502, body: { error: e.message, details: e.details } };
-  return { status: 500, body: { error: 'Internal server error' } };
+  return mapError?.(e) ?? { status: 500, body: { error: 'Internal server error' } };
 }
 
 export class HttpServer {
@@ -64,10 +81,10 @@ export class HttpServer {
   private readonly bucket = new TokenBucket(300, 30);
   private log;
 
-  constructor(private readonly p: Platform) {
+  constructor(private readonly p: HttpHost) {
     this.log = p.logs.logger('http');
-    registerCoreRoutes(this.router, p);
-    const tls = p.config.http.tls;
+    p.registerRoutes(this.router);
+    const tls = p.http.tls;
     const handler = (req: IncomingMessage, res: ServerResponse) => void this.handle(req, res);
     this.server = tls ? createHttpsServer({ cert: readFileSync(tls.cert), key: readFileSync(tls.key) }, handler) : createHttpServer(handler);
     this.server.headersTimeout = 30_000;
@@ -78,9 +95,9 @@ export class HttpServer {
   listen(): Promise<{ port: number; host: string }> {
     return new Promise((resolvePromise, reject) => {
       this.server.once('error', reject);
-      this.server.listen(this.p.config.http.port, this.p.config.http.host, () => {
+      this.server.listen(this.p.http.port, this.p.http.host, () => {
         const addr = this.server.address();
-        resolvePromise({ port: typeof addr === 'object' && addr ? addr.port : this.p.config.http.port, host: this.p.config.http.host });
+        resolvePromise({ port: typeof addr === 'object' && addr ? addr.port : this.p.http.port, host: this.p.http.host });
       });
     });
   }
@@ -101,7 +118,7 @@ export class HttpServer {
       ctx.user = user;
       ctx.authKind = 'token';
     } else {
-      const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      const token = parseCookies(req.headers.cookie)[this.p.sessionCookie];
       if (token) {
         const s = this.p.auth.authenticateSession(token);
         if (s) {
@@ -137,10 +154,10 @@ export class HttpServer {
       path: url.pathname,
       params: {},
       query: Object.fromEntries(url.searchParams),
-      ip: clientIp(req, this.p.config.http.trustProxy),
+      ip: clientIp(req, this.p.http.trustProxy),
       requestId: newRequestId(),
     };
-    securityHeaders(res, this.p.config.dev);
+    securityHeaders(res, this.p.dev);
     res.setHeader('x-request-id', ctx.requestId);
     try {
       if (ctx.path.includes('\0') || ctx.path.split('/').includes('..')) throw new ApiError(400, 'Invalid path');
@@ -148,7 +165,7 @@ export class HttpServer {
       else if (/^\/modules\/[a-z][a-z0-9-]{1,47}\/assets\//.test(ctx.path)) await this.handleModuleAsset(ctx);
       else await this.handleStatic(ctx);
     } catch (e) {
-      const { status, body } = errorStatus(e);
+      const { status, body } = errorStatus(e, this.p.mapError);
       if (status >= 500) this.log.error(`${method} ${ctx.path} failed: ${(e as Error)?.message}`, { requestId: ctx.requestId, stack: (e as Error)?.stack });
       if (ctx.path.startsWith('/api/') || res.headersSent) sendJson(res, status, { ...body, requestId: ctx.requestId });
       else sendRaw(res, status, String(body.error ?? 'Error'), { 'content-type': 'text/plain; charset=utf-8' });
@@ -181,7 +198,7 @@ export class HttpServer {
     }
 
     const m = /^\/api\/v1\/modules\/([a-z][a-z0-9-]{1,47})(\/.*)?$/.exec(ctx.path);
-    if (m) return this.handleModuleApi(ctx, m[1], m[2] || '/');
+    if (m && this.p.modules) return this.handleModuleApi(ctx, this.p.modules, m[1], m[2] || '/');
     if (hit && 'methodNotAllowed' in hit) throw new ApiError(405, 'Method not allowed');
     throw new ApiError(404, 'Not found');
   }
@@ -193,9 +210,9 @@ export class HttpServer {
   }
 
   /** Dispatch to a module-registered route (§15, §27). */
-  private async handleModuleApi(ctx: RequestContext, id: string, subPath: string) {
+  private async handleModuleApi(ctx: RequestContext, modules: Pick<ModuleManager, 'get'>, id: string, subPath: string) {
     if (!ctx.user) throw new ApiError(401, 'Sign in required');
-    const managed = this.p.modules.get(id);
+    const managed = modules.get(id);
     if (!managed) throw new ApiError(404, `Module ${id} is not installed`, { reason: 'module-missing' });
     if (managed.state !== 'ACTIVE' || !managed.instance) {
       const reason = !managed.enabled ? 'module-disabled' : managed.state === 'BLOCKED' ? 'dependency-unavailable' : managed.state === 'ERROR' ? 'module-error' : 'module-unavailable';
@@ -238,7 +255,7 @@ export class HttpServer {
   /** Module frontend bundles: `/modules/<id>/assets/<file>`, limited to the frontend's directory. */
   private async handleModuleAsset(ctx: RequestContext) {
     const m = /^\/modules\/([a-z][a-z0-9-]{1,47})\/assets\/(.+)$/.exec(ctx.path);
-    if (!m || ctx.method !== 'GET') throw new ApiError(404, 'Not found');
+    if (!m || ctx.method !== 'GET' || !this.p.modules) throw new ApiError(404, 'Not found');
     this.authenticate(ctx.req, ctx);
     if (!ctx.user) throw new ApiError(401, 'Sign in required');
     const managed = this.p.modules.get(m[1]);
@@ -260,7 +277,8 @@ export class HttpServer {
   /** The React shell, with SPA fallback to index.html. */
   private async handleStatic(ctx: RequestContext) {
     if (!['GET', 'HEAD'].includes(ctx.method)) throw new ApiError(405, 'Method not allowed');
-    const root = this.p.config.paths.shell;
+    const root = this.p.shellDir;
+    if (root === null) throw new ApiError(404, 'Not found');
     const index = join(root, 'index.html');
     if (!existsSync(index)) {
       return sendRaw(ctx.res, 503, 'The web interface is not built. Run `npm run build` (or use `npm run dev`).', { 'content-type': 'text/plain; charset=utf-8' });

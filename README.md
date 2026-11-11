@@ -37,7 +37,8 @@ The UI is built with [ENTERPRISE-UI](https://github.com/iant89/ENTERPRISE-UI) on
 - [Writing a module](#writing-a-module)
 - [CLI](#cli)
 - [Testing](#testing)
-- Further reading: [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md) · [Releases and updates](docs/releases.md)
+- Servermin transformation: [Roadmap](docs/roadmap.md) · [Project state](docs/project-state.md) · [Current state](docs/architecture/current-state.md) · [Target state](docs/architecture/target-state.md) · [Migration plan](docs/architecture/migration-plan.md)
+- Further reading: [Manager](docs/manager.md) · [Architecture](docs/architecture.md) · [Module development](docs/module-development.md) · [Security](docs/security.md) · [Operations](docs/operations.md) · [Releases and updates](docs/releases.md)
 
 ## Quick start (development)
 
@@ -86,6 +87,9 @@ For a portable USB installation, bundle the Node.js runtime so the stick does no
 host's packages: `npm run package -- --bundle-node [--arch x64,arm64]` downloads the pinned
 official build (`servermin.nodeVersion` in `package.json`), verifies its SHA-256 and includes it.
 
+To also run the central [Servermin Manager](docs/manager.md) on a server, install with
+`sudo ./install.sh --manager`. It is a separate service with its own account, port (8480) and data.
+
 After installing, check everything end to end on the server:
 
 ```bash
@@ -112,6 +116,7 @@ packages/
   client/     @servermin/client  browser runtime shared by the shell and module UIs: API client,
                                  WebSocket channels, router, frontend registry, React hooks
   shell/      @servermin/shell   the React application shell (ENTERPRISE-UI)
+  manager/    @servermin/manager the Servermin Manager: accounts, server inventory, API (docs/manager.md)
   cli/        serverctl          command-line client for the API
 modules/      the nine built-in modules (each: module.json, src/backend, src/frontend, test)
 examples/     hello: a minimal module that exercises every extension point
@@ -227,6 +232,10 @@ serverctl update module <id>              # install one module package from the 
 serverctl update auto on|off [--window 03:00]
 serverctl update rollback [--yes]
 ```
+
+`servermin-agent` describes the server itself: `sudo servermin-agent status` prints its server id,
+agent id, hostname, version and state; after `serverctl login` it also lists the capabilities the
+active modules provide.
 
 ## Testing
 

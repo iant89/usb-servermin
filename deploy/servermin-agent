@@ -1,0 +1,5 @@
+#!/bin/sh
+# servermin-agent: inspects the Servermin agent on this server (identity, state, capabilities).
+set -e
+. "$(dirname "$(readlink -f "$0")")/node-launcher.sh"
+exec "$NODE" "$APP/cli/servermin-agent.js" "$@"

@@ -85,7 +85,8 @@ case "$op" in
     only unit
     require unit "$UNIT_RE"
     action="${op#service.}"
-    if [[ "${A[unit]}" == "server-control.service" && "$action" != "start" ]]; then die "refusing to $action Server Control itself"; fi
+    # The agent's own unit, under its file name and its alias.
+    if [[ "${A[unit]}" =~ ^(servermin-agent|server-control)\.service$ && "$action" != "start" ]]; then die "refusing to $action Server Control itself"; fi
     exec systemctl "$action" -- "${A[unit]}"
     ;;
   storage.mount)

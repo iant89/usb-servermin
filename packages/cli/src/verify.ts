@@ -465,6 +465,29 @@ async function apiChecks() {
   });
   if (signedIn.status === 'FAIL') return;
 
+  await check('Agent identity', async () => {
+    const a = await ok<any>('GET', '/api/v1/agent');
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    assert(uuid.test(a.serverId) && uuid.test(a.agentId), 'the agent did not report a server id and an agent id');
+    assert(a.state === 'RUNNING', `the agent state is ${a.state}`);
+    report.agent = { serverId: a.serverId, agentId: a.agentId, version: a.version, capabilities: a.capabilities };
+    const file = join(config?.agent?.stateDir ?? join(config?.paths?.data ?? '/var/lib/servermin', 'agent'), 'identity.json');
+    // Only checkable where the file is readable (root, on the server itself).
+    let stored: any = null;
+    try {
+      stored = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      /* not on this machine, or not readable as this user */
+    }
+    if (stored) {
+      assert(stored.agentId === a.agentId && stored.serverId === a.serverId, `${file} does not match the identity the running agent reports`);
+      if (statSync(file).mode & 0o077) warn(`${file} is readable by other users`);
+    }
+    if (existsSync('/run/systemd/system') && sh('systemctl', ['is-active', 'servermin-agent.service']).out !== 'active') warn('the servermin-agent.service alias is missing; run: sudo systemctl enable server-control.service');
+    if (!a.machineId) warn('no /etc/machine-id on this host');
+    return `server ${a.serverId}, agent ${a.agentId}, ${a.capabilities.length} capabilities`;
+  });
+
   let modules: any[] = [];
   await check('Built-in modules active', async () => {
     modules = await ok('GET', '/api/v1/platform/modules');

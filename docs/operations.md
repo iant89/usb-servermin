@@ -7,10 +7,11 @@
 | Program | `/opt/servermin` (`server/`, `shell/`, `modules/` bundled set, `cli/`, `bin/`, optional `node/`) |
 | Configuration | `/etc/servermin/config.json`, `/etc/servermin/privileged.conf` (optional) |
 | Data | `/var/lib/servermin` (`core.db`, `module-data/<id>/`, installed `modules/`) |
+| Agent identity | `/var/lib/servermin/agent/identity.json` (0600); elsewhere with `agent.stateDir` |
 | Logs | journald (`journalctl -u server-control`), the platform database (Logs module), and optionally `/var/log/servermin/servermin.log` (`logging.file: true`) |
 | Scratch | `/var/tmp/servermin` |
 | Privilege helper | `/usr/lib/servermin/servermin-privileged`, `/etc/sudoers.d/servermin` |
-| Service | `/etc/systemd/system/server-control.service` |
+| Service | `/etc/systemd/system/server-control.service`, also reachable as `servermin-agent.service` (alias) |
 
 Program files and data are separate, so the program can live on the USB stick while data moves to
 another disk: change `paths.data` and `paths.modules` in the configuration. If data lives on a
@@ -33,6 +34,29 @@ separate mount, add it to `RequiresMountsFor=` in the unit.
 
 `privileged.mode`: `sudo` (production), `simulate` (log instead of executing; development), or
 `disabled`. The server name and log level can also be changed at runtime in Settings.
+
+## Agent identity
+
+Each server has a server id and an agent id, created on first start
+([ADR-003](adr/ADR-003-server-identity.md)):
+
+```bash
+sudo servermin-agent status        # ids, hostname, version, service state (read from disk)
+servermin-agent status             # after `serverctl login`: also OS, health and capabilities
+servermin-agent id                 # the two ids, for scripts
+```
+
+- The ids are identifiers, not secrets.
+- By default the identity lives with the data, so a portable installation is the same server on
+  whatever machine it boots. To tie the identity to a machine instead, set
+  `"agent": { "stateDir": "/path/on/that/machine" }` in `/etc/servermin/config.json` (absolute
+  path, writable by `servermin`).
+- **Cloning**: a copied data directory carries the identity. On the copy, stop the service, delete
+  `agent/identity.json` and start it again to get a new one.
+- If the file is damaged, the server starts with a new identity, keeps the old file as
+  `identity.json.damaged-<time>`, and shows an error notification.
+- `systemctl status servermin-agent` and `systemctl status server-control` are the same unit. Use
+  `journalctl -u server-control` for its log.
 
 ## Portable USB installations (§38)
 
@@ -69,6 +93,8 @@ What helps, in order:
 ## Backups (§49)
 
 Back up `/etc/servermin` and `/var/lib/servermin` (stop the service, or use `sqlite3 core.db ".backup"`).
+The backup includes the agent identity; when restoring onto a *second* machine while the first keeps
+running, delete `agent/identity.json` there (see [Agent identity](#agent-identity)).
 That covers core configuration, users, module settings, installed module manifests and code, the audit
 log, and module data such as application and deployment definitions. A backup module can automate this.
 

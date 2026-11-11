@@ -87,41 +87,72 @@ export class Database {
   }
 }
 
+/**
+ * Schema fragments shared by every Servermin service that keeps its own accounts and audit trail
+ * (the agent's core database and the Manager's). They are the tables `AuthService`, `AuditLog`
+ * and the key-value store expect; changing one means a new migration in each service.
+ */
+export const ACCOUNT_SCHEMA = `
+  CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    permissions TEXT NOT NULL DEFAULT '[]',
+    disabled INTEGER NOT NULL DEFAULT 0,
+    notification_cursor INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_login_at TEXT
+  );
+  CREATE TABLE sessions (
+    id_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    ip TEXT,
+    user_agent TEXT
+  );
+  CREATE TABLE api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    prefix TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    expires_at TEXT
+  );
+`;
+
+export const AUDIT_SCHEMA = `
+  CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    user TEXT,
+    action TEXT NOT NULL,
+    module TEXT,
+    target TEXT,
+    result TEXT NOT NULL,
+    metadata TEXT,
+    ip TEXT
+  );
+  CREATE INDEX audit_log_timestamp ON audit_log(timestamp);
+`;
+
+export const KV_SCHEMA = `
+  CREATE TABLE kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`;
+
 export const CORE_MIGRATIONS: Migration[] = [
   {
     version: 1,
     name: 'core schema',
     sql: `
-      CREATE TABLE users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-        display_name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        permissions TEXT NOT NULL DEFAULT '[]',
-        disabled INTEGER NOT NULL DEFAULT 0,
-        notification_cursor INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        last_login_at TEXT
-      );
-      CREATE TABLE sessions (
-        id_hash TEXT PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
-        ip TEXT,
-        user_agent TEXT
-      );
-      CREATE TABLE api_tokens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        token_hash TEXT NOT NULL UNIQUE,
-        prefix TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        last_used_at TEXT,
-        expires_at TEXT
-      );
+      ${ACCOUNT_SCHEMA}
       CREATE TABLE module_registry (
         id TEXT PRIMARY KEY,
         version TEXT NOT NULL,
@@ -138,18 +169,7 @@ export const CORE_MIGRATIONS: Migration[] = [
         "values" TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      CREATE TABLE audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL,
-        user TEXT,
-        action TEXT NOT NULL,
-        module TEXT,
-        target TEXT,
-        result TEXT NOT NULL,
-        metadata TEXT,
-        ip TEXT
-      );
-      CREATE INDEX audit_log_timestamp ON audit_log(timestamp);
+      ${AUDIT_SCHEMA}
       CREATE TABLE logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT NOT NULL,
@@ -170,10 +190,7 @@ export const CORE_MIGRATIONS: Migration[] = [
         module TEXT,
         permission TEXT
       );
-      CREATE TABLE kv (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
+      ${KV_SCHEMA}
     `,
   },
 ];
