@@ -3,17 +3,18 @@
 Working memory for the Servermin transformation. Read this first in a new session, then
 [roadmap.md](roadmap.md). Updated at the end of every phase.
 
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 
 ## Current phase
 
-Phase 3 — Agent/Manager protocol (not started).
+Phase 4 — Server registration (not started).
 
 ## Completed phases
 
 - Phase 0 — Architecture audit (2026-11-10)
 - Phase 1 — Agent foundation (2026-11-10)
 - Phase 2 — Manager foundation (2026-11-10)
+- Phase 3 — Agent/Manager protocol (2026-11-11)
 
 ## Active work
 
@@ -27,7 +28,6 @@ Nothing.
 
 | Decision | Default | Record |
 | --- | --- | --- |
-| Manager TLS trust: pinned self-signed by default, own certificate supported | Yes, in Phase 3 | ADR-002, to be written |
 | Rename the repository | Owner's call; nothing depends on it | |
 | When to make `servermin-agent.service` the unit file and `server-control.service` the alias | Not before the release after the one that ships Phase 1 | [target-state §10](architecture/target-state.md#10-naming) |
 
@@ -35,6 +35,11 @@ Nothing.
 
 - [ADR-001](adr/ADR-001-manager-agent-architecture.md) (Accepted): the Agent is the existing core
   plus a manager link; the Manager is a new process reusing core libraries.
+- [ADR-002](adr/ADR-002-agent-manager-protocol.md) (Accepted): agent-initiated WebSocket over TLS
+  to `/api/v1/agent/link`; Ed25519 challenge signed together with the Manager key the agent saw;
+  agents pin the Manager's public key (SPKI); TLS by default with an in-process self-signed
+  certificate, renewed with the same key; heartbeat 15 s, STALE 35 s, timeout 60 s; equal-jitter
+  backoff 1-60 s; duplicate ids resolved by probing the live connection.
 - [ADR-003](adr/ADR-003-server-identity.md) (Accepted): two random UUIDs (agent id, server id)
   stored with the data; hostname, machine id and hardware are attributes; ids are not secrets.
 - Phase 1, unit naming: alias instead of rename, because the installed release's updater performs
@@ -42,6 +47,20 @@ Nothing.
 - Phase 1, capabilities: a flat, derived list of module ids and provided services from modules
   that are `ACTIVE` and not `ERROR`/`OFFLINE`; manifest `capabilities` tags are reported per module
   as `tags` and left for Phase 9 to formalise.
+
+## What Phase 3 added
+
+- `packages/protocol`: envelope, seven message types, validation, close codes, version negotiation,
+  the signed text. Reserved types are refused by name.
+- Core: `tls/certificate.ts` (X.509 encoder, `ensureSelfSignedCertificate`), `agent/agent-key.ts`,
+  `agent/manager-link.ts`, `agent.manager` configuration (`url`, `fingerprint`, `ca`; env
+  `SERVERMIN_AGENT_MANAGER_URL|FINGERPRINT`), link status in `GET /api/v1/agent` and
+  `servermin-agent status`, gateway `upgrades` for other WebSocket paths.
+- Manager: migration 2 (`agents`), `AgentRegistry`, `AgentLinkServer`, inventory states
+  ONLINE/STALE/OFFLINE, reconciliation on start, `agents.*` configuration, TLS by default
+  (`http.selfSigned`, `SERVERMIN_MANAGER_TLS`), `GET /api/v1/servers/:id/agent`, TLS details in
+  `GET /api/v1/manager`. `install.sh --manager` prints https and the key fingerprint.
+- Known issue 14 (Manager without TLS) is resolved.
 
 ## What Phase 2 added
 
@@ -95,9 +114,21 @@ From Phase 2:
     second Manager migration ships (Phase 19 at the latest).
 13. The Manager's health is not part of the updater's health check; a release whose Manager fails
     to start is not rolled back.
-14. Without TLS the Manager serves passwords in clear text, like the agent. Phase 3 must make TLS
-    the default for the Manager.
+14. ~~Without TLS the Manager serves passwords in clear text.~~ Resolved in Phase 3.
 15. `servermin-verify` does not check a Manager installation.
+
+From Phase 3:
+
+16. Agents cannot be enrolled through the API yet: Phase 4's registration does that. Until then a
+    real deployment cannot connect an agent without writing to `manager.db`.
+17. The self-signed certificate makes browsers and `curl` warn until it is trusted
+    (`--cacert`) or replaced by your own.
+18. Replacing the Manager's TLS key breaks every pinned agent; there is no key rotation with
+    overlap yet (Phase 37: certificate rotation).
+19. The local agent's `agent.manager` settings are file-only; there is no UI for them (Phase 4's
+    `servermin-agent register` will write them).
+20. `SERVERMIN_ROOT` (development) replaces the whole configuration with defaults, including
+    `agent.manager`; use `SERVERMIN_AGENT_MANAGER_URL` in development.
 
 ## Technical debt
 
@@ -114,27 +145,31 @@ From Phase 2:
 
 ## Test status
 
-2026-11-10, end of Phase 2: `npm run typecheck` clean, `npm run build` clean, `npm test`
-33 files / 309 tests passing (Node.js 22.23.4). Added in Phase 2: `packages/core/test/schema.test.ts`
-(the refactored schema equals the 1.0.0 one), `packages/manager/test/manager.test.ts`,
-`tests/integration/manager.test.ts` (independent start, setup token, inventory CRUD and audit,
-persistence across restart, permissions, CSRF/token/lockout, cookie separation from an agent,
-WebSocket, the built program's exit codes, and that it contains no process-spawning code).
+2026-11-11, end of Phase 3: `npm run typecheck` clean, `npm run build` clean, `npm test`
+36 files / 376 tests passing (Node.js 22.23.4). Added in Phase 3:
+`packages/protocol/test/messages.test.ts`, `packages/core/test/manager-link-units.test.ts`
+(certificate checked against OpenSSL, agent key, backoff, configuration) and
+`tests/integration/agent-link.test.ts`. The integration tests cover: pinned TLS connect, heartbeats,
+reports; Manager stopped and restarted; the built Manager killed with SIGKILL and restarted on
+the same data; a Manager that stops answering; sockets dropped mid-frame in both directions;
+STALE → OFFLINE for a silent agent and back to ONLINE; authentication timeout; malformed, unknown,
+reserved, out-of-order, binary and oversized frames; unknown agent, wrong key, server-id mismatch,
+key binding; wrong pin, untrusted and CA-trusted certificates; address lockout; duplicate and
+half-open connections; removing a server; a real agent process end to end. The agent-link suite
+passed four consecutive runs.
 
 ## Next phase
 
-Phase 3 — Agent/Manager protocol. Plan:
+Phase 4 — Server registration. Plan:
 
-1. ADR-002: transport (WebSocket over TLS, opened by the agent), trust (pinned Manager
-   certificate by default), message envelope, version negotiation.
-2. `packages/protocol`: message types and validation shared by both sides.
-3. Agent link in `packages/core/src/agent/`: connect, authenticate, heartbeat, timeout, jittered
-   backoff, connection state; `agent.manager` configuration.
-4. Manager endpoint for agents, separate from the browser WebSocket; server state from the
-   connection (`ONLINE`, `STALE`, `OFFLINE`); duplicate agent id detection.
-5. Tests with real processes: kill the Manager, drop the socket mid-message, stall heartbeats,
-   malformed and oversized frames.
-
-Authentication of agents needs credentials that only registration (Phase 4) issues. Phase 3 should
-therefore define and test the authentication handshake against a key enrolled directly in the
-Manager database by the test, and Phase 4 adds the registration flow that enrols it.
+1. Registration codes in the Manager: random, one-time, expiring, hashed at rest, audited; created
+   by `servers.manage`, optionally bound to an existing server.
+2. `servermin-agent register CODE --manager wss://…` (run as root, or through a local channel to the
+   running agent, see known issue 8). It shows the Manager's key fingerprint for confirmation, sends
+   the agent's public key and identity with the code, and writes `agent.manager` once approved.
+3. Approval: a registration waits as pending until an administrator approves it (or is
+   auto-approved when the code says so); then `AgentRegistry.enroll`. A reinstalled agent on a
+   known server adopts the server id (`IdentityStore.setServerId`), and AUTHENTICATED already
+   carries the server id.
+4. Revocation of an agent (closes its connection with 4401), and re-registration after a key loss.
+5. Tests: expiry, reuse, wrong code, brute force, approval, revocation, reinstall on a known server.

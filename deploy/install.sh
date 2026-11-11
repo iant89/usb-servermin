@@ -151,7 +151,14 @@ echo "Check the installation:   sudo servermin-verify"
 sleep 2
 if [[ $MANAGER -eq 1 ]]; then
   MPORT="$("$NODE" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("/etc/servermin-manager/config.json")).http.port??8480))}catch{process.stdout.write("8480")}')"
-  echo "Servermin Manager:        systemctl status servermin-manager   (http://$(hostname -I | awk '{print $1}'):$MPORT/api/v1/health)"
+  # TLS by default with a self-signed certificate (ADR-002); agents pin the key fingerprint printed below.
+  echo "Servermin Manager:        systemctl status servermin-manager   (https://$(hostname -I | awk '{print $1}'):$MPORT/api/v1/health)"
+  MCERT=/var/lib/servermin-manager/tls/manager.crt
+  if [[ -f "$MCERT" ]] && command -v openssl >/dev/null; then
+    echo "Manager key fingerprint:  $(openssl x509 -pubkey -noout -in "$MCERT" | openssl pkey -pubin -outform der | sha256sum | cut -d' ' -f1)"
+  else
+    echo "Manager key fingerprint:  journalctl -u servermin-manager | grep 'key fingerprint'"
+  fi
   [[ -f /var/lib/servermin-manager/setup-token ]] && echo "Manager setup token:      $(cat /var/lib/servermin-manager/setup-token)"
 fi
 if [[ -f /var/lib/servermin/setup-token ]]; then

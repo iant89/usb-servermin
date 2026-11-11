@@ -48,7 +48,7 @@ reviewed and documented — nothing less).
 | 0 | Architecture audit | [x] | The current system can be explained without guessing |
 | 1 | Agent foundation | [x] | Agent starts automatically and reports server id, agent id, hostname, OS, version, capabilities |
 | 2 | Manager foundation | [x] | Manager starts independently and keeps a persistent server inventory |
-| 3 | Agent/Manager protocol | [ ] | Agent disconnects and reconnects without manual intervention |
+| 3 | Agent/Manager protocol | [x] | Agent disconnects and reconnects without manual intervention |
 | 4 | Server registration | [ ] | Code → install → `servermin-agent register CODE` → approve → managed |
 | 5 | Server inventory | [ ] | Manager accurately reflects server state |
 | 6 | Hardware discovery | [ ] | A newly registered server populates its hardware profile automatically |
@@ -123,11 +123,18 @@ Not verified under a running systemd: the sandbox settings of the Manager unit (
 `RestrictAddressFamilies`, …). The unit passes `systemd-analyze verify`, and the program was run
 as the `servermin-manager` account from a real installation, but not inside that sandbox.
 
-### Phase 3 — Agent/Manager protocol `[ ]`
+### Phase 3 — Agent/Manager protocol `[x]`
 
-- [ ] Schema, message ids, correlation ids
-- [ ] Authentication
-- [ ] Reconnection, heartbeat, timeout, backoff, connection state
+- [x] Schema, message ids, correlation ids — `packages/protocol`, ADR-002
+- [x] Authentication — Ed25519 challenge/response bound to the Manager key; `agents` table; audit
+- [x] Reconnection, heartbeat, timeout, backoff, connection state — `core/src/agent/manager-link.ts`,
+      `manager/src/link-server.ts`; ONLINE / STALE / OFFLINE
+- [x] TLS by default for the Manager (self-signed, key pinning; own certificate or CA supported)
+- [x] Duplicate agent id detection (live connection probed; half-open replaced)
+
+Agents are enrolled directly (`AgentRegistry.enroll`) until Phase 4 adds registration. Not verified
+under a running systemd: an agent and a Manager on separate hosts across a real network partition.
+Partitions were simulated (killed process, dropped sockets, stalled peers) on loopback.
 
 ### Phase 4 — Server registration `[ ]`
 

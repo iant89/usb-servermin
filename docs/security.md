@@ -86,6 +86,12 @@ Updates are the one path by which new root-executed code reaches a server, so th
   from sources you trust; integrity checks prove a package was not modified, not that it is safe.
 - **TLS**: set `http.tls.cert` and `http.tls.key` in `/etc/servermin/config.json`, or put a reverse proxy
   in front (set `http.trustProxy: true` only then). Without TLS, use it on a trusted network.
+- **Manager link** ([ADR-002](adr/ADR-002-agent-manager-protocol.md)): the agent connects out over
+  TLS and pins the Manager's public key. It authenticates with an Ed25519 key that never leaves
+  `agent-key.pem` (0600). The signature covers a fresh nonce and the Manager key the agent saw, so
+  it cannot be replayed or relayed. The Manager is TLS by default with a self-signed certificate.
+  Refused agents learn only that they failed; the reason is audited. Repeated failed handshakes
+  lock out the address.
 - **Audit log**: logins, user changes, every module lifecycle operation and setting change, privileged
   operations, and module actions that declare `audit` (container start/stop, service restarts, mounts,
   network changes, deployments, terminal sessions). Export it as CSV from Settings → Audit log.

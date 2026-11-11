@@ -2,9 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { isUuid, type Database, type EventBus } from '@servermin/core';
 
 /**
- * States a server can be in (roadmap Phase 5). Until agents connect (Phase 3) every server is
- * UNKNOWN: the Manager knows the server exists and nothing else. A state is always derived from
- * what an agent reports or fails to report; it is never set through the API.
+ * States a server can be in (roadmap Phase 5). A state is always derived from what an agent
+ * reports or fails to report; it is never set through the API. Phase 3 uses:
+ *
+ * - `UNKNOWN`: no agent enrolled; the Manager knows the server exists and nothing else.
+ * - `ONLINE`: the agent is connected and its heartbeats arrive.
+ * - `STALE`: connected, but heartbeats stopped arriving; the connection is given up at the timeout.
+ * - `OFFLINE`: an agent is enrolled and not connected.
  */
 export const SERVER_STATES = ['UNKNOWN', 'DISCOVERING', 'CONNECTING', 'ONLINE', 'DEGRADED', 'STALE', 'WAKING', 'UPDATING', 'REBOOTING', 'SHUTTING_DOWN', 'OFFLINE', 'ERROR', 'RECOVERY'] as const;
 export type ServerState = (typeof SERVER_STATES)[number];
@@ -154,6 +158,43 @@ export class Inventory {
     if (!server) return this.require(id);
     this.bus.publish('inventory.server.updated', { server }, 'manager');
     return server;
+  }
+
+  /** Records that `agentId` now represents the server. It is not connected yet, so OFFLINE. */
+  attachAgent(id: string, agentId: string): ServerRecord {
+    this.db.run("UPDATE servers SET agent_id = ?, state = 'OFFLINE', updated_at = ? WHERE id = ?", [agentId, new Date().toISOString(), id]);
+    const server = this.require(id);
+    this.bus.publish('inventory.server.updated', { server }, 'manager');
+    return server;
+  }
+
+  /**
+   * Sets the state that the agent connection implies. Publishes only when something an observer
+   * cares about changed (state, agent version), so heartbeats do not flood the bus. Returns
+   * undefined when the server no longer exists.
+   */
+  setLiveState(id: string, state: ServerState, extra: { agentVersion?: string; lastSeenAt?: string } = {}): ServerRecord | undefined {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const agentVersion = extra.agentVersion ?? current.agentVersion;
+    const lastSeenAt = extra.lastSeenAt ?? current.lastSeenAt;
+    const changed = state !== current.state || agentVersion !== current.agentVersion;
+    if (!changed && lastSeenAt === current.lastSeenAt) return current;
+    this.db.run('UPDATE servers SET state = ?, agent_version = ?, last_seen_at = ?' + (changed ? ', updated_at = ?' : '') + ' WHERE id = ?', changed ? [state, agentVersion, lastSeenAt, new Date().toISOString(), id] : [state, agentVersion, lastSeenAt, id]);
+    const server = this.get(id)!;
+    if (changed) this.bus.publish('inventory.server.updated', { server, previousState: current.state }, 'manager');
+    return server;
+  }
+
+  /**
+   * After a start nothing is connected: whatever the last process recorded (it may have crashed
+   * while servers were ONLINE) is replaced by OFFLINE, or UNKNOWN for servers without an agent.
+   */
+  reconcileOnStart(): number {
+    const now = new Date().toISOString();
+    const a = this.db.run("UPDATE servers SET state = 'OFFLINE', updated_at = ? WHERE agent_id IS NOT NULL AND state <> 'OFFLINE'", [now]);
+    const b = this.db.run("UPDATE servers SET state = 'UNKNOWN', updated_at = ? WHERE agent_id IS NULL AND state <> 'UNKNOWN'", [now]);
+    return Number(a.changes) + Number(b.changes);
   }
 
   remove(id: string): ServerRecord {

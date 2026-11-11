@@ -31,7 +31,7 @@ export function registerManagerRoutes(router: Router, m: Manager) {
     auth,
     audit,
     cookieName: MANAGER_SESSION_COOKIE,
-    secureCookies: () => (config.auth.secureCookies === 'auto' ? !!config.http.tls : config.auth.secureCookies),
+    secureCookies: () => (config.auth.secureCookies === 'auto' ? m.tls.enabled : config.auth.secureCookies),
     setupToken: m.setupToken,
     onLogin: (username) => m.bus.publish('auth.login', { username }, 'manager'),
     sessionInfo: (authenticated) => ({ service: 'manager', ...(authenticated ? { managerVersion: CORE_VERSION } : {}) }),
@@ -42,11 +42,19 @@ export function registerManagerRoutes(router: Router, m: Manager) {
     presets: MANAGER_ROLE_PRESETS,
   }));
 
-  router.get('/api/v1/manager', AUTHENTICATED, () => ({ version: CORE_VERSION, ...m.health(), servers: inventory.count() }));
+  router.get('/api/v1/manager', AUTHENTICATED, () => ({ version: CORE_VERSION, ...m.health(), servers: inventory.count(), tls: m.tls, agents: { connected: m.links.connectedCount() } }));
 
   // ── Server inventory ───────────────────────────────────────────────────────────
   router.get('/api/v1/servers', 'servers.read', () => inventory.list());
   router.get('/api/v1/servers/:id', 'servers.read', (ctx) => inventory.require(ctx.params.id));
+  /** The server's agent: enrolment, live connection and its last report. */
+  router.get('/api/v1/servers/:id/agent', 'servers.read', (ctx) => {
+    const server = inventory.require(ctx.params.id);
+    const agent = m.agents.forServer(server.id);
+    if (!agent) return { enrolled: false, connection: null };
+    const { publicKey: _key, ...rest } = agent;
+    return { enrolled: true, ...rest, connection: m.links.connection(agent.agentId) };
+  });
 
   /** Runs an inventory change and records it, whether it succeeded or was refused. */
   const audited = <T extends { id: string; name: string }>(ctx: RequestContext, action: string, target: string | undefined, fn: () => T): T => {

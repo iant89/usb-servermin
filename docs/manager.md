@@ -4,9 +4,11 @@ The Manager is the central service of Servermin: one place that knows every serv
 separate process from the agent (`server-control.service`), built from the same libraries
 ([ADR-001](adr/ADR-001-manager-agent-architecture.md)).
 
-**What exists today (Phase 2):** accounts, a persistent server inventory, a REST API and a
-WebSocket endpoint. **What does not exist yet:** agents cannot connect to it (Phase 3) or register
-(Phase 4), so every server is in state `UNKNOWN`, and there is no web interface (Phase 8); it is
+**What exists today (Phases 2-3):** accounts, a persistent server inventory, a REST API, a
+WebSocket endpoint, TLS by default, and the agent endpoint. Enrolled agents connect, authenticate
+and keep their server `ONLINE` / `STALE` / `OFFLINE` ([ADR-002](adr/ADR-002-agent-manager-protocol.md)).
+**What does not exist yet:** the registration flow that enrols an agent (Phase 4; until then a
+server without an enrolled agent stays `UNKNOWN`), and a web interface (Phase 8). The Manager is
 driven through the API.
 
 ## Install
@@ -39,12 +41,51 @@ Every setting has a default; the file is only needed to change one.
   "http": { "host": "0.0.0.0", "port": 8480, "tls": { "cert": "/etc/servermin-manager/tls.crt", "key": "/etc/servermin-manager/tls.key" }, "trustProxy": false },
   "paths": { "data": "/var/lib/servermin-manager" },
   "logging": { "level": "INFO" },
-  "auth": { "sessionHours": 12, "loginAttempts": 5, "lockoutMinutes": 15 }
+  "auth": { "sessionHours": 12, "loginAttempts": 5, "lockoutMinutes": 15 },
+  "agents": { "heartbeatIntervalMs": 15000, "staleAfterMs": 35000, "timeoutMs": 60000, "authTimeoutMs": 10000, "duplicateProbeMs": 5000, "requireKeyBinding": true }
 }
 ```
 
+### TLS
+
+TLS is on by default. Without `http.tls`, the Manager creates a self-signed certificate in
+`/var/lib/servermin-manager/tls/` on first start (`manager.key` 0600) and renews it with **the same
+key** before it expires. At every start it prints the **key fingerprint** (the SHA-256 of the
+public key) to the journal, and `install.sh --manager` prints it too. Agents pin this value:
+
+```bash
+journalctl -u servermin-manager | grep 'key fingerprint'
+# or
+sudo openssl x509 -pubkey -noout -in /var/lib/servermin-manager/tls/manager.crt | openssl pkey -pubin -outform der | sha256sum
+```
+
+To use your own certificate, set `http.tls.cert` and `http.tls.key`. Agents can then pin its key or
+trust its CA (`agent.manager.ca`). If you replace a self-signed key, every pinned agent stops
+connecting until it is given the new fingerprint. Plain HTTP (`"http": { "selfSigned": false }`, or
+`SERVERMIN_MANAGER_TLS=off`) sends passwords and agent traffic in clear text; the Manager warns at
+every start.
+
+### Agents
+
+An agent connects when `/etc/servermin/config.json` on its server names the Manager:
+
+```json
+{ "agent": { "manager": { "url": "wss://manager.lan:8480", "fingerprint": "<key fingerprint>" } } }
+```
+
+The agent opens a WebSocket to `/api/v1/agent/link`, proves who it is with its Ed25519 key, and
+sends a heartbeat every `heartbeatIntervalMs`. A server is `STALE` after `staleAfterMs` without a
+message and `OFFLINE` after `timeoutMs`, when the connection is closed. The agent reconnects on its
+own, with jittered backoff from 1 s to 60 s. `servermin-agent status` and `GET /api/v1/agent` on the
+agent show the connection state and the last error. Connections, refusals (with the reason) and
+duplicate identities are audited as `agent.connect`, `agent.authenticate` and `agent.duplicate`.
+
+Behind a reverse proxy that terminates TLS, set `agents.requireKeyBinding: false` and pin the
+proxy's key on the agents: the agent then sees the proxy's key, not the Manager's.
+
 Environment overrides: `SERVERMIN_MANAGER_CONFIG`, `SERVERMIN_MANAGER_DATA_DIR`,
-`SERVERMIN_MANAGER_HOST`, `SERVERMIN_MANAGER_PORT`, `SERVERMIN_MANAGER_LOG_LEVEL`
+`SERVERMIN_MANAGER_HOST`, `SERVERMIN_MANAGER_PORT`, `SERVERMIN_MANAGER_LOG_LEVEL`, `SERVERMIN_MANAGER_TLS`
+(`off` or `self-signed`)
 (`/etc/servermin-manager/environment` is read by the unit).
 
 An invalid configuration stops the service with exit code 78 and a message naming the setting; the
@@ -60,7 +101,7 @@ If you move the data directory, also adjust the unit: it only allows writes to i
 TOKEN=$(sudo cat /var/lib/servermin-manager/setup-token)
 curl -c cookies -H 'X-Servermin-Request: 1' -H 'Content-Type: application/json' \
   -d "{\"setupToken\":\"$TOKEN\",\"username\":\"admin\",\"password\":\"a long password 1\"}" \
-  http://manager:8480/api/v1/auth/setup
+  --cacert /var/lib/servermin-manager/tls/manager.crt https://localhost:8480/api/v1/auth/setup
 ```
 
 For scripts, create an API token (`POST /api/v1/auth/tokens`) and send it as
@@ -74,10 +115,11 @@ with the same rules, as on an agent (`auth/*`, `users`, `audit`); see [security.
 | Method and path | Permission | |
 | --- | --- | --- |
 | `GET health` | public | `{ status, version, service: "manager" }` |
-| `GET manager` | signed in | Version, uptime, number of servers by state |
+| `GET manager` | signed in | Version, uptime, number of servers by state, TLS (`keyFingerprint`), connected agents |
 | `GET permissions` | signed in | Permission catalogue and role presets |
 | `GET servers` | `servers.read` | All servers, by name |
 | `GET servers/:id` | `servers.read` | One server |
+| `GET servers/:id/agent` | `servers.read` | Its agent: enrolment, live connection, last reported state |
 | `POST servers` | `servers.manage` | `{ name, hostname?, description?, id? }` |
 | `PATCH servers/:id` | `servers.manage` | `{ name?, hostname?, description? }`; `hostname: null` clears it |
 | `DELETE servers/:id` | `servers.manage` | |

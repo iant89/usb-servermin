@@ -7,7 +7,23 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { mergeConfig } from '../../packages/core/src/index';
 import { Manager, defaultManagerConfig, type ManagerConfig } from '../../packages/manager/src/index';
+import { request as httpsRequest } from 'node:https';
+import type { TLSSocket } from 'node:tls';
+import { publicKeyFingerprint } from '../../packages/core/src/index';
 import { ROOT, startServer, waitFor } from './helpers';
+
+/** GET over TLS without trusting the certificate; returns the body and the server's key fingerprint. */
+const httpsGet = (url: string) =>
+  new Promise<{ status: number; body: string; fingerprint: string }>((resolve, reject) => {
+    const req = httpsRequest(url, { rejectUnauthorized: false }, (res) => {
+      let body = '';
+      const fingerprint = publicKeyFingerprint((res.socket as TLSSocket).getPeerCertificate().raw);
+      res.on('data', (d) => (body += d));
+      res.on('end', () => resolve({ status: res.statusCode!, body, fingerprint }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
 
 interface TestManager {
   manager: Manager;
@@ -32,7 +48,8 @@ const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
 /** Starts a real Manager (HTTP, WebSocket, SQLite) in a temporary directory and creates its administrator. */
 async function startManager(opts: { setup?: boolean } = {}): Promise<TestManager> {
   const dir = mkdtempSync(join(tmpdir(), 'servermin-mgr-'));
-  const config: ManagerConfig = mergeConfig(defaultManagerConfig(dir), { http: { host: '127.0.0.1', port: 0 }, logging: { level: 'DEBUG', stdout: false } });
+  // Plain HTTP: these tests are about the API. TLS is covered in agent-link.test.ts and by the program test below.
+  const config: ManagerConfig = mergeConfig(defaultManagerConfig(dir), { http: { host: '127.0.0.1', port: 0, selfSigned: false }, logging: { level: 'DEBUG', stdout: false } });
   let manager = await quietly(() => new Manager(config).start());
   const t: TestManager = {
     manager,
@@ -286,13 +303,19 @@ describe('servermin-manager program', () => {
       });
     });
 
-  it('runs as its own process, prints the setup token, serves the API and stops cleanly on SIGTERM', async () => {
+  it('runs as its own process, over TLS by default, prints the setup token and key fingerprint, and stops cleanly on SIGTERM', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'servermin-mgr-bin-'));
     try {
       const port = await freePort();
       const p = run({ SERVERMIN_MANAGER_CONFIG: join(dir, 'none.json'), SERVERMIN_MANAGER_DATA_DIR: join(dir, 'data'), SERVERMIN_MANAGER_HOST: '127.0.0.1', SERVERMIN_MANAGER_PORT: String(port) });
-      const health = await waitFor(() => fetch(`http://127.0.0.1:${port}/api/v1/health`).then((r) => r.json()).catch(() => null), (h) => !!h, 10_000);
-      expect(health).toMatchObject({ service: 'manager', status: 'HEALTHY' });
+      const res = await waitFor(() => httpsGet(`https://127.0.0.1:${port}/api/v1/health`).catch(() => null), (h) => !!h, 10_000);
+      expect(JSON.parse(res!.body)).toMatchObject({ service: 'manager', status: 'HEALTHY' });
+      const certFile = join(dir, 'data/tls/manager.crt');
+      expect(res!.fingerprint).toBe(publicKeyFingerprint(readFileSync(certFile)));
+      expect(statSync(join(dir, 'data/tls/manager.key')).mode & 0o777).toBe(0o600);
+      expect(p.output()).toContain(`Servermin Manager key fingerprint (SHA-256): ${res!.fingerprint}`);
+      // Plain HTTP on the TLS port gets nothing useful.
+      expect(await fetch(`http://127.0.0.1:${port}/api/v1/health`).then((r) => r.status).catch(() => 'refused')).not.toBe(200);
       const token = readFileSync(join(dir, 'data/setup-token'), 'utf8').trim();
       expect(p.output()).toContain(`Create one with this setup token: ${token}`);
       p.child.kill('SIGTERM');
@@ -321,7 +344,7 @@ describe('servermin-manager program', () => {
     await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', r));
     try {
       const port = (blocker.address() as { port: number }).port;
-      const p = run({ SERVERMIN_MANAGER_CONFIG: join(dir, 'none.json'), SERVERMIN_MANAGER_DATA_DIR: join(dir, 'data'), SERVERMIN_MANAGER_HOST: '127.0.0.1', SERVERMIN_MANAGER_PORT: String(port) });
+      const p = run({ SERVERMIN_MANAGER_CONFIG: join(dir, 'none.json'), SERVERMIN_MANAGER_DATA_DIR: join(dir, 'data'), SERVERMIN_MANAGER_HOST: '127.0.0.1', SERVERMIN_MANAGER_PORT: String(port), SERVERMIN_MANAGER_TLS: 'off' });
       expect(await p.exited).toBe(1);
       expect(p.output()).toContain(`port ${port} is already in use`);
     } finally {
