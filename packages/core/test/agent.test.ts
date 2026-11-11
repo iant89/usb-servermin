@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AgentService, IdentityStore, deriveCapabilities, isUuid, parseIdentity, readHardwareIdentity, readMachineId, type AgentModuleInfo } from '../src/index';
+import { generateKeyPairSync } from 'node:crypto';
+import { AgentKey, AgentService, IdentityStore, deriveCapabilities, isUuid, parseAgentPublicKey, parseIdentity, publicKeyFingerprint, readHardwareIdentity, readMachineId, verifyAgentSignature, type AgentModuleInfo } from '../src/index';
 import { agentStateDir, defaultConfig, mergeConfig, validateConfig } from '../src/config/config';
 
 let dir: string;
@@ -162,5 +163,77 @@ describe('agent configuration', () => {
   it('rejects a relative state directory', () => {
     expect(() => validateConfig(mergeConfig(defaultConfig('/x'), { agent: { stateDir: 'agent' } }))).toThrow(/agent\.stateDir/);
     expect(() => validateConfig(mergeConfig(defaultConfig('/x'), { agent: { stateDir: 5 as any } }))).toThrow(/agent\.stateDir/);
+  });
+});
+
+describe('agent key', () => {
+  it('creates an Ed25519 key once, keeps the private half private and signs with it', () => {
+    const first = AgentKey.load(join(dir, 'agent'));
+    expect(first.created).toBe(true);
+    expect(statSync(join(dir, 'agent/agent-key.pem')).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(dir, 'agent/agent-key.pem'), 'utf8')).toMatch(/^-----BEGIN PRIVATE KEY-----/);
+    expect(readFileSync(join(dir, 'agent/agent-key.pub'), 'utf8').trim()).toBe(first.key.publicKey);
+    expect(first.key.publicKey).not.toContain('PRIVATE');
+    expect(first.key.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.key.fingerprint).toBe(publicKeyFingerprint(first.key.publicKey));
+
+    const again = AgentKey.load(join(dir, 'agent'));
+    expect(again.created).toBe(false);
+    expect(again.key.publicKey).toBe(first.key.publicKey);
+
+    const data = Buffer.from('prove it');
+    const signature = first.key.sign(data);
+    expect(verifyAgentSignature(first.key.publicKey, data, signature)).toBe(true);
+    expect(verifyAgentSignature(first.key.publicKey, Buffer.from('prove it!'), signature)).toBe(false);
+    expect(verifyAgentSignature(AgentKey.load(join(dir, 'other')).key.publicKey, data, signature)).toBe(false);
+    expect(verifyAgentSignature(first.key.publicKey, data, 'not a signature')).toBe(false);
+    expect(verifyAgentSignature('not a key', data, signature)).toBe(false);
+  });
+
+  it.each([
+    ['garbage', 'not a key'],
+    ['a key of another type', generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }) as string],
+    ['an empty file', ''],
+  ])('replaces a damaged key file (%s) and keeps the old one aside', (_name, content) => {
+    mkdirSync(join(dir, 'agent'));
+    writeFileSync(join(dir, 'agent/agent-key.pem'), content);
+    const r = AgentKey.load(join(dir, 'agent'));
+    expect(r.created).toBe(true);
+    expect(readFileSync(r.replaced!.keptAs, 'utf8')).toBe(content);
+    expect(AgentKey.load(join(dir, 'agent')).key.publicKey).toBe(r.key.publicKey);
+  });
+
+  it('accepts only an Ed25519 public key as an agent key', () => {
+    const { key } = AgentKey.load(dir);
+    expect(parseAgentPublicKey(key.publicKey)).not.toBeNull();
+    const rsa = (generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
+    for (const bad of [rsa, '', 'AAAA', key.publicKey + '!', 42, null, { key: key.publicKey }, readFileSync(join(dir, 'agent-key.pem'), 'utf8')]) expect(parseAgentPublicKey(bad), String(bad).slice(0, 20)).toBeNull();
+  });
+});
+
+describe('manager connection settings', () => {
+  const withManager = (manager: Record<string, unknown>) => validateConfig(mergeConfig(defaultConfig('/x'), { agent: { manager } } as any));
+
+  it('is off by default and accepts an encrypted URL, with or without a pin', () => {
+    expect(defaultConfig('/x').agent.manager).toEqual({ url: null, fingerprint: null, ca: null, insecure: false });
+    expect(() => withManager({ url: 'https://manager.lan:8480' })).not.toThrow();
+    expect(() => withManager({ url: 'wss://manager.lan:8480', fingerprint: 'AB:'.repeat(31) + 'AB' })).not.toThrow();
+    expect(() => withManager({ url: 'https://manager.lan', ca: '/etc/servermin/manager-ca.pem' })).not.toThrow();
+  });
+
+  it.each([
+    [{ url: 'http://manager.lan:8480' }, /not encrypted/],
+    [{ url: 'ws://manager.lan:8480', insecure: 'yes' }, /not encrypted/],
+    [{ url: 'manager.lan:8480' }, /https:\/\/ or wss:\/\/ URL/],
+    [{ url: 'ftp://manager.lan' }, /https:\/\/ or wss:\/\/ URL/],
+    [{ url: 'https://admin:secret@manager.lan' }, /must not contain credentials/],
+    [{ url: 'https://manager.lan', fingerprint: 'abc' }, /fingerprint/],
+    [{ url: 'https://manager.lan', ca: 'ca.pem' }, /agent\.manager\.ca/],
+  ])('rejects %j', (manager, message) => {
+    expect(() => withManager(manager)).toThrow(message);
+  });
+
+  it('allows an unencrypted connection only when that is asked for explicitly', () => {
+    expect(() => withManager({ url: 'http://127.0.0.1:8480', insecure: true })).not.toThrow();
   });
 });

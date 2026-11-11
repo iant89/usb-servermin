@@ -13,6 +13,15 @@ export interface ManagerConfig {
   };
   logging: { level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'; stdout: boolean };
   auth: CoreConfig['auth'];
+  /** Agent connections. */
+  agents: {
+    /** How often agents send a heartbeat. */
+    heartbeatSeconds: number;
+    /** Silence after which an agent's connection is closed and its server is OFFLINE. At least twice the heartbeat. */
+    timeoutSeconds: number;
+    /** How long a new connection has to authenticate. */
+    handshakeSeconds: number;
+  };
   dev: boolean;
 }
 
@@ -26,6 +35,7 @@ export function defaultManagerConfig(base = '/'): ManagerConfig {
     paths: { data: join(base, 'var/lib/servermin-manager') },
     logging: { level: 'INFO', stdout: true },
     auth: { sessionHours: 12, secureCookies: 'auto', loginAttempts: 5, lockoutMinutes: 15 },
+    agents: { heartbeatSeconds: 15, timeoutSeconds: 60, handshakeSeconds: 10 },
     dev: false,
   };
 }
@@ -39,6 +49,9 @@ export function validateManagerConfig(config: ManagerConfig): ManagerConfig {
   if (typeof config.paths.data !== 'string' || !isAbsolute(config.paths.data)) problems.push('paths.data must be absolute');
   if (!['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(config.logging.level)) problems.push('logging.level is invalid');
   for (const k of ['sessionHours', 'loginAttempts', 'lockoutMinutes'] as const) if (!(Number(config.auth[k]) >= 1)) problems.push(`auth.${k} must be at least 1`);
+  if (!(Number(config.agents.heartbeatSeconds) >= 0.1 && Number(config.agents.heartbeatSeconds) <= 3600)) problems.push('agents.heartbeatSeconds must be between 0.1 and 3600');
+  else if (!(Number(config.agents.timeoutSeconds) >= 2 * config.agents.heartbeatSeconds && Number(config.agents.timeoutSeconds) <= 86400)) problems.push('agents.timeoutSeconds must be at least twice agents.heartbeatSeconds');
+  if (!(Number(config.agents.handshakeSeconds) >= 0.1 && Number(config.agents.handshakeSeconds) <= 120)) problems.push('agents.handshakeSeconds must be between 0.1 and 120');
   if (problems.length) throw new Error(`Invalid Manager configuration:\n  ${problems.join('\n  ')}`);
   return config;
 }

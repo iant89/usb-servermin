@@ -42,7 +42,14 @@ export function registerManagerRoutes(router: Router, m: Manager) {
     presets: MANAGER_ROLE_PRESETS,
   }));
 
-  router.get('/api/v1/manager', AUTHENTICATED, () => ({ version: CORE_VERSION, ...m.health(), servers: inventory.count() }));
+  router.get('/api/v1/manager', AUTHENTICATED, () => ({
+    version: CORE_VERSION,
+    ...m.health(),
+    servers: inventory.count(),
+    agents: m.agents.connections(),
+    // What an agent needs to trust this Manager: the certificate fingerprint to pin.
+    tls: m.tlsFingerprint ? { fingerprint: m.tlsFingerprint } : null,
+  }));
 
   // ── Server inventory ───────────────────────────────────────────────────────────
   router.get('/api/v1/servers', 'servers.read', () => inventory.list());
@@ -73,4 +80,13 @@ export function registerManagerRoutes(router: Router, m: Manager) {
     audited(ctx, 'server.remove', ctx.params.id.slice(0, 64), () => inventory.remove(ctx.params.id));
     return { ok: true };
   });
+
+  // ── Agents (ADR-002) ───────────────────────────────────────────────────────────
+  // Enrolling by hand: paste the ids and the public key the agent prints. Registration codes
+  // (Phase 4) will do the same thing without the copying.
+  router.put('/api/v1/servers/:id/agent', 'servers.manage', (ctx) => {
+    const b = body(ctx);
+    return audited(ctx, 'agent.enrol', ctx.params.id.slice(0, 64), () => inventory.enrolAgent(ctx.params.id, { agentId: b.agentId, publicKey: b.publicKey }, actor(ctx)));
+  });
+  router.delete('/api/v1/servers/:id/agent', 'servers.manage', (ctx) => audited(ctx, 'agent.revoke', ctx.params.id.slice(0, 64), () => inventory.removeAgent(ctx.params.id)));
 }

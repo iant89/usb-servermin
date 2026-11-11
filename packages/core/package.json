@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@servermin/protocol": "1.0.0",
     "@servermin/sdk": "1.0.0",
     "ws": "^8.22.1"
   }

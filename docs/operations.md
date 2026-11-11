@@ -55,6 +55,10 @@ servermin-agent id                 # the two ids, for scripts
   `agent/identity.json` and start it again to get a new one.
 - If the file is damaged, the server starts with a new identity, keeps the old file as
   `identity.json.damaged-<time>`, and shows an error notification.
+- `servermin-agent key` prints the ids and the agent's public key, for enrolling the server in a
+  Servermin Manager; see [manager.md](manager.md#connecting-an-agent). The private key is
+  `agent/agent-key.pem` (0600); a damaged one is replaced like the identity, and the server must
+  then be enrolled again.
 - `systemctl status servermin-agent` and `systemctl status server-control` are the same unit. Use
   `journalctl -u server-control` for its log.
 

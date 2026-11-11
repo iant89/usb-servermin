@@ -88,7 +88,8 @@ host's packages: `npm run package -- --bundle-node [--arch x64,arm64]` downloads
 official build (`servermin.nodeVersion` in `package.json`), verifies its SHA-256 and includes it.
 
 To also run the central [Servermin Manager](docs/manager.md) on a server, install with
-`sudo ./install.sh --manager`. It is a separate service with its own account, port (8480) and data.
+`sudo ./install.sh --manager`. It is a separate service with its own account, port (8480), certificate and data; servers report to
+it once [their agent is enrolled](docs/manager.md#connecting-an-agent).
 
 After installing, check everything end to end on the server:
 
@@ -116,6 +117,7 @@ packages/
   client/     @servermin/client  browser runtime shared by the shell and module UIs: API client,
                                  WebSocket channels, router, frontend registry, React hooks
   shell/      @servermin/shell   the React application shell (ENTERPRISE-UI)
+  protocol/   @servermin/protocol the messages agents and the Manager exchange (docs/adr/ADR-002…)
   manager/    @servermin/manager the Servermin Manager: accounts, server inventory, API (docs/manager.md)
   cli/        serverctl          command-line client for the API
 modules/      the nine built-in modules (each: module.json, src/backend, src/frontend, test)

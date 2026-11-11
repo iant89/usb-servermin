@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import type { HealthStatus, LogLevel } from '@servermin/sdk';
 import { AgentService } from './agent/agent-service';
+import { ManagerLink, type ManagerLinkOptions } from './agent/manager-link';
 import { AuditLog } from './audit/audit';
 import { AuthService } from './auth/auth-service';
 import { SetupToken } from './auth/setup-token';
@@ -42,6 +43,8 @@ export interface PlatformOptions {
   storageScript?: string;
   /** Test only: delay added to every write on the storage thread, to simulate slow media. */
   storageWriteDelayMs?: number;
+  /** Test only: reconnect pacing of the Manager link. */
+  linkBackoff?: ManagerLinkOptions['backoff'];
 }
 
 /**
@@ -61,6 +64,7 @@ export class Platform {
   modules!: ModuleManager;
   updates!: UpdateService;
   agent!: AgentService;
+  link!: ManagerLink;
   setupToken!: SetupToken;
   http!: HttpServer;
   gateway!: WebSocketGateway;
@@ -124,8 +128,9 @@ export class Platform {
       modules: () => this.modules.list().map((m) => ({ id: m.id, version: m.version, state: m.state, health: m.health.status, provides: m.provides, tags: m.capabilities })),
       health: () => this.health().status,
       serverName: () => this.settings().serverName,
+      link: () => this.link.status(),
     });
-    const { replaced } = this.agent.start();
+    const { replaced, keyReplaced } = this.agent.start();
     if (replaced)
       this.notifications.notify({
         title: 'Agent identity replaced',
@@ -133,6 +138,29 @@ export class Platform {
         tone: 'error',
         permission: 'platform.config',
       });
+    if (keyReplaced)
+      this.notifications.notify({
+        title: 'Agent key replaced',
+        message: `The agent key file was unreadable (${keyReplaced.reason}) and a new key was created. A Servermin Manager will refuse this server until the new key is enrolled. The old file was kept as ${keyReplaced.keptAs}.`,
+        tone: 'error',
+        permission: 'platform.config',
+      });
+    const mc = this.config.agent.manager;
+    this.link = new ManagerLink({
+      url: mc.url,
+      fingerprint: mc.fingerprint,
+      caFile: mc.ca,
+      identity: () => this.agent.identity,
+      key: this.agent.key,
+      serverState: async () => {
+        const r = await this.agent.report();
+        return { name: r.name, hostname: r.hostname, agentVersion: r.version, os: r.os.name, health: r.health, state: r.state };
+      },
+      capabilities: () => this.agent.capabilities(),
+      adoptServerId: (id) => this.agent.adoptServerId(id),
+      logger: this.logs.logger('agent'),
+      backoff: this.options.linkBackoff,
+    });
     this.setupToken = new SetupToken(join(paths.data, 'setup-token'));
     this.ensureSetupToken();
 
@@ -159,6 +187,11 @@ export class Platform {
 
     this.updates.start();
     this.agent.setState('RUNNING');
+    // Last: the Manager hears from a server that is fully up, and a Manager that is down delays nothing.
+    this.link.start();
+    this.bus.subscribe('module.state.changed', () => this.link.notifyChanged(), 'core');
+    this.bus.subscribe('module.health.changed', () => this.link.notifyChanged(), 'core');
+    this.bus.subscribe('config.changed', () => this.link.notifyChanged(), 'core');
 
     this.pruneTimer = setInterval(() => void this.logs.prune(this.config.logging.retentionDays), 3_600_000);
     this.pruneTimer.unref();
@@ -224,6 +257,7 @@ export class Platform {
   async stop() {
     this.log.info('Shutting down');
     this.agent?.setState('STOPPING');
+    this.link?.stop();
     if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.updates?.stop();
     this.gateway?.close();

@@ -27,6 +27,8 @@ export interface GatewayHost {
   channels: Record<string, CoreChannel>;
   /** Module channels; absent on a service that runs no modules. */
   modules?: Pick<ModuleManager, 'get' | 'canSubscribe'>;
+  /** Upgrade requests for other endpoints of the same server. Return true when the request was taken over. */
+  otherUpgrade?(req: IncomingMessage, socket: Duplex, head: Buffer): boolean;
 }
 
 /**
@@ -63,7 +65,10 @@ export class WebSocketGateway {
       socket.write(`HTTP/1.1 ${code} ${msg}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
       socket.destroy();
     };
-    if (url.pathname !== '/api/v1/ws') return reject(404, 'Not Found');
+    if (url.pathname !== '/api/v1/ws') {
+      if (this.p.otherUpgrade?.(req, socket, head)) return;
+      return reject(404, 'Not Found');
+    }
     const ctx: any = {};
     try {
       this.http.authenticate(req, ctx);

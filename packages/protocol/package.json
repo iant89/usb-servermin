@@ -1,0 +1,10 @@
+{
+  "name": "@servermin/protocol",
+  "version": "1.0.0",
+  "description": "The messages a Servermin agent and a Servermin Manager exchange, with validation shared by both sides.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
