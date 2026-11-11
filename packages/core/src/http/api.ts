@@ -141,7 +141,7 @@ export function registerCoreRoutes(router: Router, p: Platform) {
 
   // ── Observability ──────────────────────────────────────────────────────────────
   router.get('/api/v1/system', AUTHENTICATED, async () => ({ ...(await hostSummary(config.paths.data)), health: p.health(), coreVersion: CORE_VERSION }));
-  router.get('/api/v1/agent', AUTHENTICATED, () => p.agent.report());
+  router.get('/api/v1/agent', AUTHENTICATED, async () => ({ ...(await p.agent.report()), manager: p.agent.linkStatus() }));
   router.get('/api/v1/platform/health', 'modules.read', () => ({ ...p.health(), processes: p.processes.list() }));
   router.get('/api/v1/events', 'platform.logs.read', (ctx) => p.bus.history(ctx.query.pattern || '*', Math.min(Number(ctx.query.limit) || 100, 200)));
   router.get('/api/v1/logs', 'platform.logs.read', (ctx) =>

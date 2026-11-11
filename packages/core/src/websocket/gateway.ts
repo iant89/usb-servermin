@@ -27,6 +27,8 @@ export interface GatewayHost {
   channels: Record<string, CoreChannel>;
   /** Module channels; absent on a service that runs no modules. */
   modules?: Pick<ModuleManager, 'get' | 'canSubscribe'>;
+  /** Other WebSocket endpoints on the same port, by path, that do their own authentication (the Manager's agent link). */
+  upgrades?: Record<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>;
 }
 
 /**
@@ -63,6 +65,8 @@ export class WebSocketGateway {
       socket.write(`HTTP/1.1 ${code} ${msg}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
       socket.destroy();
     };
+    const other = this.p.upgrades && Object.hasOwn(this.p.upgrades, url.pathname) ? this.p.upgrades[url.pathname] : undefined;
+    if (other) return other(req, socket, head);
     if (url.pathname !== '/api/v1/ws') return reject(404, 'Not Found');
     const ctx: any = {};
     try {

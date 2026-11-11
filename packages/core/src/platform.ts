@@ -42,6 +42,8 @@ export interface PlatformOptions {
   storageScript?: string;
   /** Test only: delay added to every write on the storage thread, to simulate slow media. */
   storageWriteDelayMs?: number;
+  /** Test only: faster Manager reconnects. */
+  link?: Parameters<AgentService['startLink']>[1];
 }
 
 /**
@@ -124,6 +126,7 @@ export class Platform {
       modules: () => this.modules.list().map((m) => ({ id: m.id, version: m.version, state: m.state, health: m.health.status, provides: m.provides, tags: m.capabilities })),
       health: () => this.health().status,
       serverName: () => this.settings().serverName,
+      onLinkChange: (status) => this.bus.publish('agent.manager.changed', { state: status.state, lastError: status.lastError }),
     });
     const { replaced } = this.agent.start();
     if (replaced)
@@ -152,6 +155,8 @@ export class Platform {
     this.gateway = new WebSocketGateway({ logs: this.logs, auth: this.auth, hub: this.hub, modules: this.modules, channels: coreChannels(this) }, this.http);
     this.address = await this.http.listen();
     this.log.info(`Listening on ${this.config.http.tls ? 'https' : 'http'}://${this.address.host}:${this.address.port}`);
+    // Before the modules load, so the Manager sees the server soon after boot; capabilities follow as modules start.
+    this.agent.startLink(this.config.agent.manager, this.options.link);
 
     await this.modules.init();
     const states = this.modules.list().map((m) => `${m.id}=${m.state}`);
@@ -224,6 +229,7 @@ export class Platform {
   async stop() {
     this.log.info('Shutting down');
     this.agent?.setState('STOPPING');
+    await this.agent?.stopLink();
     if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.updates?.stop();
     this.gateway?.close();

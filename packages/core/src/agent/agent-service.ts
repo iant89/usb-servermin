@@ -2,6 +2,10 @@ import os from 'node:os';
 import type { HealthStatus, Logger, ModuleState } from '@servermin/sdk';
 import { osRelease } from '../system/host-info';
 import { CORE_VERSION } from '../version';
+import { readFileSync } from 'node:fs';
+import { LINK_PATH, PROTOCOL_VERSIONS, type ServerStatePayload } from '@servermin/protocol';
+import { loadAgentKey } from './agent-key';
+import { ManagerLink, linkUrl, type ManagerLinkOptions, type ManagerLinkStatus } from './manager-link';
 import { IdentityStore, readHardwareIdentity, readMachineId, type AgentIdentity, type HardwareIdentity } from './identity';
 
 export type AgentState = 'STARTING' | 'RUNNING' | 'STOPPING';
@@ -62,7 +66,18 @@ export interface AgentServiceDeps {
   serverName(): string;
   /** Root of the file system that host facts are read from. Tests only. */
   hostRoot?: string;
+  /** Told about every change of the Manager connection. */
+  onLinkChange?(status: ManagerLinkStatus): void;
 }
+
+export interface ManagerLinkConfig {
+  url: string | null;
+  fingerprint: string | null;
+  /** Path of a PEM file. */
+  ca: string | null;
+}
+
+const DISABLED_LINK: ManagerLinkStatus = { url: null, state: 'DISABLED', connectedSince: null, lastConnectedAt: null, lastError: null, failedAttempts: 0, nextAttemptAt: null, sessionId: null, protocolVersion: null, managerKeyFingerprint: null };
 
 /**
  * The Agent side of Servermin (ADR-001): this server's identity and its description of itself.
@@ -72,6 +87,8 @@ export class AgentService {
   private store: IdentityStore;
   private identityValue: AgentIdentity | null = null;
   private startedAt = Date.now();
+  private link: ManagerLink | null = null;
+  private linkProblem: string | null = null;
   state: AgentState = 'STARTING';
 
   constructor(private readonly d: AgentServiceDeps) {
@@ -98,6 +115,57 @@ export class AgentService {
     if (state === this.state) return;
     this.d.logger.info(`Agent ${state.toLowerCase()}`);
     this.state = state;
+  }
+
+  /**
+   * Connects to the configured Manager (ADR-002), or does nothing when none is configured: an
+   * agent without a Manager is the stand-alone product. Problems are reported in `linkStatus()`
+   * and the log; they never stop the agent.
+   */
+  startLink(config: ManagerLinkConfig, tuning: Pick<ManagerLinkOptions, 'backoff' | 'connectTimeoutMs' | 'stableAfterMs'> = {}): ManagerLinkStatus {
+    if (this.link || !config.url) return this.linkStatus();
+    let ca: string | null = null;
+    try {
+      if (config.ca && !config.fingerprint) ca = readFileSync(config.ca, 'utf8');
+    } catch (e) {
+      this.linkProblem = `Cannot read agent.manager.ca (${config.ca}): ${(e as Error).message}`;
+      this.d.logger.error(this.linkProblem);
+      return this.linkStatus();
+    }
+    const key = loadAgentKey(this.store.dir);
+    if (key.replaced) this.d.logger.error('The agent key was unreadable and has been replaced; the Manager will refuse this agent until it is registered again', key.replaced);
+    else if (key.created) this.d.logger.info('Created the agent key');
+    this.link = new ManagerLink({
+      url: linkUrl(config.url, LINK_PATH),
+      fingerprint: config.fingerprint,
+      ca,
+      key: key.key,
+      identity: () => this.identity,
+      version: CORE_VERSION,
+      heartbeat: () => ({ state: this.state, health: this.d.health(), uptimeSeconds: Math.round((Date.now() - this.startedAt) / 1000) }),
+      capabilities: () => [this.state, ...this.capabilities()],
+      report: () => this.serverState(),
+      logger: this.d.logger,
+      onChange: (status) => this.d.onLinkChange?.(status),
+      ...tuning,
+    });
+    this.d.logger.info('Connecting to the Manager', { url: config.url, pinned: !!config.fingerprint, protocolVersions: PROTOCOL_VERSIONS });
+    this.link.start();
+    return this.linkStatus();
+  }
+
+  async stopLink() {
+    await this.link?.stop();
+  }
+
+  linkStatus(): ManagerLinkStatus {
+    return this.link ? this.link.status() : { ...DISABLED_LINK, lastError: this.linkProblem };
+  }
+
+  /** The report as the protocol carries it: without the ids, which the connection already established. */
+  async serverState(): Promise<ServerStatePayload> {
+    const { agentId: _a, serverId: _s, ...rest } = await this.report();
+    return rest;
   }
 
   capabilities(): string[] {

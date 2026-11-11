@@ -38,6 +38,8 @@ export interface LocalStatus {
   health?: string;
   capabilities?: string[];
   machineId?: string | null;
+  /** The Manager connection, from the running agent. */
+  manager?: { state: string; url: string | null; lastError: string | null; connectedSince: string | null };
 }
 
 export class CliError extends Error {}
@@ -65,7 +67,7 @@ async function fromApi(creds: { url: string; token: string }): Promise<LocalStat
   if (res.status === 404) throw new CliError(`The server at ${creds.url} is older than the agent command and has no /api/v1/agent.`);
   if (!res.ok) throw new CliError(`The agent answered ${res.status}.`);
   const r = (await res.json()) as any;
-  return { source: 'api', serverId: r.serverId, agentId: r.agentId, hostname: r.hostname, version: r.version, state: r.state, name: r.name, os: r.os?.name, health: r.health, capabilities: r.capabilities, machineId: r.machineId };
+  return { source: 'api', serverId: r.serverId, agentId: r.agentId, hostname: r.hostname, version: r.version, state: r.state, name: r.name, os: r.os?.name, health: r.health, capabilities: r.capabilities, machineId: r.machineId, manager: r.manager };
 }
 
 /** Reads the identity straight from the state directory. Needs read access to it (root or the service account). */
@@ -100,6 +102,12 @@ export function fromDisk(env: NodeJS.ProcessEnv = process.env): LocalStatus {
   return { source: 'disk', serverId: identity.serverId, agentId: identity.agentId, hostname: hostname(), version, state };
 }
 
+function managerLine(m: NonNullable<LocalStatus['manager']>): string {
+  if (m.state === 'DISABLED') return m.lastError ? `none (${m.lastError})` : 'none configured';
+  if (m.state === 'CONNECTED') return `connected to ${m.url} since ${m.connectedSince}`;
+  return `${m.state.toLowerCase()} (${m.url})${m.lastError ? ` — ${m.lastError}` : ''}`;
+}
+
 export function format(s: LocalStatus): string {
   const rows: [string, string][] = [
     ['Server ID', s.serverId],
@@ -110,6 +118,7 @@ export function format(s: LocalStatus): string {
     ['Version', s.version ?? 'unknown'],
     ['State', s.health ? `${s.state} (health ${s.health})` : s.state],
     ['Capabilities', s.capabilities ? s.capabilities.join(', ') || 'none' : 'not available without API credentials (serverctl login)'],
+    ...(s.manager ? ([['Manager', managerLine(s.manager)]] as [string, string][]) : []),
   ];
   const width = Math.max(...rows.map(([k]) => k.length));
   return rows.map(([k, v]) => `${k.padEnd(width)}  ${v}`).join('\n') + '\n';

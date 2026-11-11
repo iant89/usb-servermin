@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@servermin/sdk": "1.0.0",
-    "ws": "^8.22.1"
+    "ws": "^8.22.1",
+    "@servermin/protocol": "1.0.0"
   }
 }

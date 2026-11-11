@@ -12,6 +12,9 @@ export { LogService } from './logging/logger';
 export { AuditLog } from './audit/audit';
 export { AgentService, deriveCapabilities, type AgentReport, type AgentModuleInfo, type AgentState } from './agent/agent-service';
 export { IdentityStore, parseIdentity, readHardwareIdentity, readMachineId, isUuid, type AgentIdentity, type HardwareIdentity } from './agent/identity';
+export { AgentKey, loadAgentKey } from './agent/agent-key';
+export { ManagerLink, backoffDelay, linkUrl, type LinkState, type ManagerLinkStatus, type ManagerLinkOptions } from './agent/manager-link';
+export { createSelfSignedCertificate, ensureSelfSignedCertificate, publicKeyFingerprint, type ManagedCertificate } from './tls/certificate';
 export { CORE_VERSION } from './version';
 // Building blocks reused by the Manager (ADR-001).
 export { ACCOUNT_SCHEMA, AUDIT_SCHEMA, KV_SCHEMA } from './database/database';
